@@ -7,11 +7,22 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
 #include "SignalSim.h"
+
+#ifdef _MSC_VER
+static int rand_r(unsigned int* seed)
+{
+	*seed = *seed * 1103515245u + 12345u;
+	return (int)((*seed >> 16) & 0x7fff);
+}
+#endif
 
 #define TOTAL_GPS_SAT 32
 #define TOTAL_BDS_SAT 63
@@ -39,6 +50,7 @@ struct CommandArguments
 void UpdateSatParamList(GNSS_TIME CurTime, KINEMATIC_INFO CurPos, int ListCount, PSIGNAL_POWER PowerList, PIONO_PARAM IonoParam);
 int StepToNextMs();
 complex_number GenerateNoise(double Sigma);
+complex_number GenerateNoise(unsigned int &Seed, double Sigma);
 NavBit* GetNavData(GnssSystem SatSystem, int SatSignalIndex, NavBit* NavBitArray[]);
 int QuantSamplesIQ2(complex_number Samples[], int Length, unsigned char QuantSamples[], double GainScale);	//TODO: Varify 2-bit quantization
 int QuantSamplesIQ4(complex_number Samples[], int Length, unsigned char QuantSamples[], double GainScale);
@@ -48,6 +60,8 @@ int QuantSamplesIQ16(complex_number Samples[], int Length, unsigned char QuantSa
 void ShowHelp(const char* ProgramName);
 bool ParseCommandLineArgs(int argc, char* argv[], CommandArguments &Arguments);
 void CreateTagFile(const std::string& tagFilePath, const OUTPUT_PARAM& outputParam);
+int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
+	UTC_TIME UtcTime, LLA_POSITION StartPos, LOCAL_SPEED StartVel);
 
 CTrajectory Trajectory;
 CPowerControl PowerControl;
@@ -145,6 +159,9 @@ int main(int argc, char* argv[])
 		OutputParam.filename[255] = '\0';
 		printf("[INFO]\tUsing output file from command line: %s\n", OutputParam.filename);
 	}
+
+	if (OutputParam.Format == OutputFormatLS3W)
+		return RunLs3wOutput(Object, Arguments, UtcTime, StartPos, StartVel);
 
 	// Validate configuration and exit if requested
 /*	if (Arguments.ValidateOnly)
@@ -785,6 +802,738 @@ int main(int argc, char* argv[])
 	return 0;
 }
 
+struct Ls3wPathConfig
+{
+	int CenterHz = 0;
+	int BandwidthHz = 0;
+	unsigned int FreqSelect[4] = {0, 0, 0, 0};
+};
+
+struct Ls3wPathRuntime
+{
+	Ls3wPathConfig Config;
+	std::vector<CSatIfSignal*> Signals;
+	std::vector<complex_number> Samples;
+	unsigned int NoiseSeed = 1;
+	int SignalCount[4] = {0, 0, 0, 0};
+};
+
+static JsonObject* FindJsonChild(JsonObject *Object, const char *Key)
+{
+	for (JsonObject *Child = Object ? Object->GetFirstObject() : NULL; Child; Child = Child->GetNextObject())
+		if (strcmp(Child->Key, Key) == 0)
+			return Child;
+	return NULL;
+}
+
+static double JsonNumberValue(JsonObject *Object, double DefaultValue)
+{
+	if (!Object)
+		return DefaultValue;
+	if (Object->Type == JsonObject::ValueTypeIntNumber || Object->Type == JsonObject::ValueTypeFloatNumber)
+		return GET_DOUBLE_VALUE(Object);
+	return DefaultValue;
+}
+
+static int ParseSystemName(const char *Name)
+{
+	if (strcmp(Name, "GPS") == 0)
+		return GpsSystem;
+	if (strcmp(Name, "BDS") == 0 || strcmp(Name, "BeiDou") == 0)
+		return BdsSystem;
+	if (strcmp(Name, "Galileo") == 0 || strcmp(Name, "GAL") == 0)
+		return GalileoSystem;
+	if (strcmp(Name, "GLONASS") == 0 || strcmp(Name, "GLO") == 0)
+		return GlonassSystem;
+	return -1;
+}
+
+static int ParseSignalName(int System, const char *Name)
+{
+	int MaxSignal = 0;
+	switch (System)
+	{
+	case GpsSystem: MaxSignal = SIGNAL_INDEX_L5; break;
+	case BdsSystem: MaxSignal = SIGNAL_INDEX_B2ab; break;
+	case GalileoSystem: MaxSignal = SIGNAL_INDEX_E6; break;
+	case GlonassSystem: MaxSignal = SIGNAL_INDEX_G2; break;
+	default: return -1;
+	}
+	for (int i = 0; i <= MaxSignal; ++i)
+		if (SignalName[System][i] && strcmp(SignalName[System][i], Name) == 0)
+			return i;
+	return -1;
+}
+
+static void ParseLs3wSystemSelect(JsonObject *SelectArray, Ls3wPathConfig &Channel)
+{
+	if (!SelectArray || SelectArray->Type != JsonObject::ValueTypeArray)
+		return;
+	for (JsonObject *Item = SelectArray->GetFirstObject(); Item; Item = Item->GetNextObject())
+	{
+		JsonObject *SystemObject = FindJsonChild(Item, "system");
+		JsonObject *SignalObject = FindJsonChild(Item, "signal");
+		JsonObject *EnableObject = FindJsonChild(Item, "enable");
+		if (!SystemObject || SystemObject->Type != JsonObject::ValueTypeString)
+			continue;
+		int System = ParseSystemName(SystemObject->String);
+		if (System < 0 || System > GlonassSystem)
+			continue;
+		int Signal = 0;
+		if (SignalObject && SignalObject->Type == JsonObject::ValueTypeString)
+			Signal = ParseSignalName(System, SignalObject->String);
+		if (Signal < 0)
+			continue;
+		bool Enable = !EnableObject || EnableObject->Type == JsonObject::ValueTypeTrue;
+		if (Enable)
+			Channel.FreqSelect[System] |= (1U << Signal);
+		else
+			Channel.FreqSelect[System] &= ~(1U << Signal);
+	}
+}
+
+static bool ParseLs3wPaths(JsonObject *RootObject, std::vector<Ls3wPathConfig> &Channels)
+{
+	JsonObject *OutputObject = FindJsonChild(RootObject, "output");
+	JsonObject *ChannelsObject = FindJsonChild(OutputObject, "ls3wPaths");
+	if (!ChannelsObject || ChannelsObject->Type != JsonObject::ValueTypeArray)
+		return false;
+	for (JsonObject *Item = ChannelsObject->GetFirstObject(); Item; Item = Item->GetNextObject())
+	{
+		Ls3wPathConfig Channel;
+		Channel.CenterHz = (int)(JsonNumberValue(FindJsonChild(Item, "centerFreq"), 0.0) * 1000000.0 + 0.5);
+		Channel.BandwidthHz = (int)(JsonNumberValue(FindJsonChild(Item, "bandwidth"), 0.0) * 1000000.0 + 0.5);
+		ParseLs3wSystemSelect(FindJsonChild(Item, "systemSelect"), Channel);
+		if (Channel.CenterHz <= 0)
+			return false;
+		if (Channel.BandwidthHz <= 0)
+			Channel.BandwidthHz = OutputParam.SampleFreq * 1000;
+		Channels.push_back(Channel);
+	}
+	return !Channels.empty();
+}
+
+static int ParseLs3wQuantBits(JsonObject *RootObject)
+{
+	JsonObject *OutputObject = FindJsonChild(RootObject, "output");
+	JsonObject *QuantObject = FindJsonChild(OutputObject, "quantBits");
+	if (!QuantObject)
+		QuantObject = FindJsonChild(FindJsonChild(OutputObject, "config"), "quantBits");
+	int QuantBits = (int)JsonNumberValue(QuantObject, 1.0);
+	return (QuantBits >= 1 && QuantBits <= 4) ? QuantBits : -1;
+}
+
+static void PutBitsMsb(uint64_t &Word, unsigned int BitOffset, unsigned int Value, unsigned int Width)
+{
+	for (unsigned int i = 0; i < Width; ++i)
+		if ((Value >> (Width - 1U - i)) & 1U)
+			Word |= 1ULL << (63U - (BitOffset + i));
+}
+
+static void WriteLe64(FILE *File, uint64_t Value)
+{
+	unsigned char Bytes[8];
+	for (int i = 0; i < 8; ++i)
+		Bytes[i] = (unsigned char)((Value >> (i * 8)) & 0xffU);
+	fwrite(Bytes, 1, sizeof(Bytes), File);
+}
+
+static unsigned int QuantizeLs3w(double Value, int QuantBits)
+{
+	if (QuantBits == 1)
+		return Value < 0.0 ? 1U : 0U;
+
+	const unsigned int Half = 1U << (QuantBits - 1);
+	const double Gain = 3.0;	// Match the original IQ4 quantizer scale.
+	unsigned int Mag = (unsigned int)(fabs(Value) * Gain);
+	if (Mag >= Half)
+		Mag = Half - 1U;
+
+	if (Value >= 0.0)
+		return Mag;
+	return (2U * Half - 1U) - Mag;
+}
+
+static std::string FormatDurationMs(long long DurationMs)
+{
+	long long Hours = DurationMs / 3600000;
+	DurationMs %= 3600000;
+	long long Minutes = DurationMs / 60000;
+	DurationMs %= 60000;
+	long long Seconds = DurationMs / 1000;
+	long long Millis = DurationMs % 1000;
+	char Buffer[64];
+	snprintf(Buffer, sizeof(Buffer), "%02lld:%02lld:%02lld.%03lld", Hours, Minutes, Seconds, Millis);
+	return Buffer;
+}
+
+static std::string MakeIniFileName(const char *OutputFileName)
+{
+	std::string IniFileName = OutputFileName;
+	size_t DotPos = IniFileName.find_last_of('.');
+	size_t SlashPos = IniFileName.find_last_of("/\\");
+	if (DotPos != std::string::npos && (SlashPos == std::string::npos || DotPos > SlashPos))
+		IniFileName.resize(DotPos);
+	IniFileName += ".ini";
+	return IniFileName;
+}
+
+static std::string BuildLs3wSignalList(const std::vector<Ls3wPathConfig> &Paths)
+{
+	std::string SignalList;
+	for (size_t path = 0; path < Paths.size(); ++path)
+	{
+		for (int sys = GpsSystem; sys <= GlonassSystem; ++sys)
+		{
+			for (int sig = 0; sig < 8; ++sig)
+			{
+				if (!(Paths[path].FreqSelect[sys] & (1U << sig)))
+					continue;
+				std::string Signal = (sys == GpsSystem) ? "GPS_" :
+					(sys == BdsSystem) ? "BDS_" :
+					(sys == GalileoSystem) ? "GAL_" : "GLO_";
+				Signal += SignalName[sys][sig];
+				if (SignalList.find(Signal) == std::string::npos)
+				{
+					if (!SignalList.empty())
+						SignalList += " ";
+					SignalList += Signal;
+				}
+			}
+		}
+	}
+	return SignalList;
+}
+
+static bool WriteLs3wIni(const char *OutputFileName, const std::vector<Ls3wPathConfig> &Paths, int QuantBits)
+{
+	std::string IniFileName = MakeIniFileName(OutputFileName);
+	FILE *File = fopen(IniFileName.c_str(), "wb");
+	if (!File)
+	{
+		printf("[ERROR]\tFailed to open ini file: %s\n", IniFileName.c_str());
+		return false;
+	}
+
+	fprintf(File, "#LS3W config file\n\n");
+	fprintf(File, "[config]\n");
+	fprintf(File, "OSC=OCXO\n");
+	fprintf(File, "SMP=%d\n", OutputParam.SampleFreq * 1000);
+	fprintf(File, "QUA=%d\n", QuantBits);
+	fprintf(File, "CHN=%zu\n", Paths.size());
+	fprintf(File, "SFT=%zu\n", Paths.size() * QuantBits * 2);
+	fprintf(File, "custom_profile=SignalSim\n\n");
+
+	for (size_t i = 0; i < Paths.size(); ++i)
+	{
+		char Name = (char)('A' + i);
+		fprintf(File, "[channel %c]\n", Name);
+		fprintf(File, "CF%c=%d\n", Name, Paths[i].CenterHz);
+		fprintf(File, "BW%c=%d\n", Name, Paths[i].BandwidthHz);
+		fprintf(File, "\n");
+	}
+
+	fprintf(File, "[notes]\n");
+	fprintf(File, "SRC=SignalSim\n");
+	fprintf(File, "URL=https://github.com/globsky/SignalSim\n");
+	fprintf(File, "AUTHOR=globsky\n");
+	fprintf(File, "SIGNALS= %s\n", BuildLs3wSignalList(Paths).c_str());
+	fclose(File);
+	printf("[INFO]\tIni file created: %s\n", IniFileName.c_str());
+	return true;
+}
+
+static void PrintLs3wPathSignalSelect(const Ls3wPathConfig &Channel)
+{
+	if (Channel.FreqSelect[GpsSystem])
+	{
+		printf("GPS : [ ");
+		for (int SignalIndex = SIGNAL_INDEX_L1CA; SignalIndex <= SIGNAL_INDEX_L5; ++SignalIndex)
+			if (Channel.FreqSelect[GpsSystem] & (1U << SignalIndex))
+				printf("%s ", SignalName[GpsSystem][SignalIndex]);
+		printf("] ");
+	}
+	if (Channel.FreqSelect[BdsSystem])
+	{
+		printf("BDS : [ ");
+		for (int SignalIndex = SIGNAL_INDEX_B1C; SignalIndex <= SIGNAL_INDEX_B2ab; ++SignalIndex)
+			if (Channel.FreqSelect[BdsSystem] & (1U << SignalIndex))
+				printf("%s ", SignalName[BdsSystem][SignalIndex]);
+		printf("] ");
+	}
+	if (Channel.FreqSelect[GalileoSystem])
+	{
+		printf("GAL : [ ");
+		for (int SignalIndex = SIGNAL_INDEX_E1; SignalIndex <= SIGNAL_INDEX_E6; ++SignalIndex)
+			if (Channel.FreqSelect[GalileoSystem] & (1U << SignalIndex))
+				printf("%s ", SignalName[GalileoSystem][SignalIndex]);
+		printf("] ");
+	}
+	if (Channel.FreqSelect[GlonassSystem])
+	{
+		printf("GLO : [ ");
+		for (int SignalIndex = SIGNAL_INDEX_G1; SignalIndex <= SIGNAL_INDEX_G2; ++SignalIndex)
+			if (Channel.FreqSelect[GlonassSystem] & (1U << SignalIndex))
+				printf("%s ", SignalName[GlonassSystem][SignalIndex]);
+		printf("] ");
+	}
+}
+
+static void AppendSignalsForLs3wPath(Ls3wPathRuntime &Channel, size_t PathIndex, NavBit *NavBitArray[])
+{
+	for (int SignalIndex = SIGNAL_INDEX_L1CA; SignalIndex <= SIGNAL_INDEX_L5; ++SignalIndex)
+	{
+		if (!(Channel.Config.FreqSelect[GpsSystem] & (1U << SignalIndex)))
+			continue;
+		int IfFreq = SignalCenterFreq[GpsSystem][SignalIndex] - Channel.Config.CenterHz;
+		Channel.SignalCount[GpsSystem] ++;
+		printf("LS3W path %zu: GPS %s with IF %+dkHz:\n", PathIndex, SignalName[GpsSystem][SignalIndex], IfFreq / 1000);
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		printf("| SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) |\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		int svCount = 0;
+		for (int i = 0; i < GpsSatNumber; ++i)
+		{
+			CSatIfSignal *Signal = new CSatIfSignal(OutputParam.SampleFreq, IfFreq, GpsSystem, SignalIndex, GpsEphVisible[i]->svid);
+			Signal->InitState(CurTime, &GpsSatParam[GpsEphVisible[i]->svid - 1], GetNavData(GpsSystem, SignalIndex, NavBitArray));
+			Channel.Signals.push_back(Signal);
+			if (svCount % 4 == 0) printf("|");
+			printf(" %02d | %+12d |", GpsEphVisible[i]->svid, (int)GpsSatParam[GpsEphVisible[i]->svid - 1].GetDoppler(SignalIndex));
+			svCount++;
+			if (svCount % 4 == 0) printf("\n");
+		}
+		while (svCount % 4 != 0) {
+			printf("    |              |");
+			svCount++;
+		}
+		if (svCount > 0 && (svCount - 1) % 4 == 3) printf("\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
+	}
+	for (int SignalIndex = SIGNAL_INDEX_B1C; SignalIndex <= SIGNAL_INDEX_B2ab; ++SignalIndex)
+	{
+		if (!(Channel.Config.FreqSelect[BdsSystem] & (1U << SignalIndex)))
+			continue;
+		int IfFreq = SignalCenterFreq[BdsSystem][SignalIndex] - Channel.Config.CenterHz;
+		Channel.SignalCount[BdsSystem] ++;
+		printf("LS3W path %zu: BeiDou %s with IF %+dkHz:\n", PathIndex, SignalName[BdsSystem][SignalIndex], IfFreq / 1000);
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		printf("| SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) |\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		int svCount = 0;
+		for (int i = 0; i < BdsSatNumber; ++i)
+		{
+			CSatIfSignal *Signal = new CSatIfSignal(OutputParam.SampleFreq, IfFreq, BdsSystem, SignalIndex, BdsEphVisible[i]->svid);
+			Signal->InitState(CurTime, &BdsSatParam[BdsEphVisible[i]->svid - 1], GetNavData(BdsSystem, SignalIndex, NavBitArray));
+			Channel.Signals.push_back(Signal);
+			if (svCount % 4 == 0) printf("|");
+			printf(" %02d | %+12d |", BdsEphVisible[i]->svid, (int)BdsSatParam[BdsEphVisible[i]->svid - 1].GetDoppler(SignalIndex));
+			svCount++;
+			if (svCount % 4 == 0) printf("\n");
+		}
+		while (svCount % 4 != 0) {
+			printf("    |              |");
+			svCount++;
+		}
+		if (svCount > 0 && (svCount - 1) % 4 == 3) printf("\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
+	}
+	for (int SignalIndex = SIGNAL_INDEX_E1; SignalIndex <= SIGNAL_INDEX_E6; ++SignalIndex)
+	{
+		if (!(Channel.Config.FreqSelect[GalileoSystem] & (1U << SignalIndex)))
+			continue;
+		int IfFreq = SignalCenterFreq[GalileoSystem][SignalIndex] - Channel.Config.CenterHz;
+		Channel.SignalCount[GalileoSystem] ++;
+		printf("LS3W path %zu: Galileo %s with IF %+dkHz:\n", PathIndex, SignalName[GalileoSystem][SignalIndex], IfFreq / 1000);
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		printf("| SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) |\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		int svCount = 0;
+		for (int i = 0; i < GalSatNumber; ++i)
+		{
+			CSatIfSignal *Signal = new CSatIfSignal(OutputParam.SampleFreq, IfFreq, GalileoSystem, SignalIndex, GalEphVisible[i]->svid);
+			Signal->InitState(CurTime, &GalSatParam[GalEphVisible[i]->svid - 1], GetNavData(GalileoSystem, SignalIndex, NavBitArray));
+			Channel.Signals.push_back(Signal);
+			if (svCount % 4 == 0) printf("|");
+			printf(" %02d | %+12d |", GalEphVisible[i]->svid, (int)GalSatParam[GalEphVisible[i]->svid - 1].GetDoppler(SignalIndex));
+			svCount++;
+			if (svCount % 4 == 0) printf("\n");
+		}
+		while (svCount % 4 != 0) {
+			printf("    |              |");
+			svCount++;
+		}
+		if (svCount > 0 && (svCount - 1) % 4 == 3) printf("\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
+	}
+	for (int SignalIndex = SIGNAL_INDEX_G1; SignalIndex <= SIGNAL_INDEX_G2; ++SignalIndex)
+	{
+		if (!(Channel.Config.FreqSelect[GlonassSystem] & (1U << SignalIndex)))
+			continue;
+		int IfFreq = SignalCenterFreq[GlonassSystem][SignalIndex] - Channel.Config.CenterHz;
+		Channel.SignalCount[GlonassSystem] ++;
+		printf("LS3W path %zu: GLONASS %s with IF %+dkHz:\n", PathIndex, SignalName[GlonassSystem][SignalIndex], IfFreq / 1000);
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		printf("| SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) |\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		int svCount = 0;
+		for (int i = 0; i < GloSatNumber; ++i)
+		{
+			int FdmaOffset = (SignalIndex == SIGNAL_INDEX_G1) ? GloEphVisible[i]->freq * 562500 : GloEphVisible[i]->freq * 437500;
+			CSatIfSignal *Signal = new CSatIfSignal(OutputParam.SampleFreq, IfFreq + FdmaOffset, GlonassSystem, SignalIndex, GloEphVisible[i]->n);
+			Signal->InitState(CurTime, &GloSatParam[GloEphVisible[i]->n - 1], GetNavData(GlonassSystem, SignalIndex, NavBitArray));
+			Channel.Signals.push_back(Signal);
+			if (svCount % 4 == 0) printf("|");
+			printf(" %02d | %+12d |", GloEphVisible[i]->n, (int)GloSatParam[GloEphVisible[i]->n - 1].GetDoppler(SignalIndex));
+			svCount++;
+			if (svCount % 4 == 0) printf("\n");
+		}
+		while (svCount % 4 != 0) {
+			printf("    |              |");
+			svCount++;
+		}
+		if (svCount > 0 && (svCount - 1) % 4 == 3) printf("\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
+	}
+}
+
+int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
+	UTC_TIME UtcTime, LLA_POSITION StartPos, LOCAL_SPEED StartVel)
+{
+	std::vector<Ls3wPathConfig> Ls3wPathConfigs;
+	int QuantBits = ParseLs3wQuantBits(RootObject);
+	if (QuantBits < 0 || !ParseLs3wPaths(RootObject, Ls3wPathConfigs) || Ls3wPathConfigs.size() > 4)
+	{
+		printf("[ERROR]\tInvalid LS3W output config: require quantBits=1..4 and 1..4 ls3wPaths\n");
+		return 1;
+	}
+	if (OutputParam.SampleFreq <= 0 || OutputParam.filename[0] == 0)
+	{
+		printf("[ERROR]\tInvalid LS3W output config: sampleFreq and name are required\n");
+		return 1;
+	}
+
+	memset(OutputParam.FreqSelect, 0, sizeof(OutputParam.FreqSelect));
+	for (size_t ch = 0; ch < Ls3wPathConfigs.size(); ++ch)
+		for (int sys = 0; sys < 4; ++sys)
+			OutputParam.FreqSelect[sys] |= Ls3wPathConfigs[ch].FreqSelect[sys];
+
+	NavBit *NavBitArray[12];
+	for (int i = 0; i < (int)(sizeof(NavBitArray) / sizeof(NavBitArray[0])); ++i)
+	{
+		switch (i)
+		{
+		case DataBitLNav:   NavBitArray[i] = new LNavBit; break;
+		case DataBitCNav:   NavBitArray[i] = new CNavBit; break;
+		case DataBitCNav2:  NavBitArray[i] = new CNav2Bit; break;
+		case DataBitGNav:   NavBitArray[i] = new GNavBit; break;
+		case DataBitD1D2:   NavBitArray[i] = new D1D2NavBit; break;
+		case DataBitBCNav1: NavBitArray[i] = new BCNav1Bit; break;
+		case DataBitBCNav2: NavBitArray[i] = new BCNav2Bit; break;
+		case DataBitBCNav3: NavBitArray[i] = new BCNav3Bit; break;
+		case DataBitINav:   NavBitArray[i] = new INavBit; break;
+		case DataBitFNav:   NavBitArray[i] = new FNavBit; break;
+		default:            NavBitArray[i] = (NavBit*)0; break;
+		}
+	}
+
+	Trajectory.ResetTrajectoryTime();
+	CurTime = UtcToGpsTime(UtcTime);
+	GLONASS_TIME GlonassTime = UtcToGlonassTime(UtcTime);
+	GNSS_TIME BdsTime = UtcToBdsTime(UtcTime);
+	KINEMATIC_INFO CurPos = LlaToEcef(StartPos);
+	SpeedLocalToEcef(StartPos, StartVel, CurPos);
+
+	for (int i = 0; i < TOTAL_GPS_SAT; ++i)
+		GpsSatParam[i].CN0 = (int)(PowerControl.InitCN0 * 100 + 0.5);
+	for (int i = 0; i < TOTAL_BDS_SAT; ++i)
+		BdsSatParam[i].CN0 = (int)(PowerControl.InitCN0 * 100 + 0.5);
+	for (int i = 0; i < TOTAL_GAL_SAT; ++i)
+		GalSatParam[i].CN0 = (int)(PowerControl.InitCN0 * 100 + 0.5);
+	for (int i = 0; i < TOTAL_GLO_SAT; ++i)
+		GloSatParam[i].CN0 = (int)(PowerControl.InitCN0 * 100 + 0.5);
+
+	NavBitArray[DataBitLNav]->SetIonoUtc(NavData.GetGpsIono(), NavData.GetGpsUtcParam());
+	NavBitArray[DataBitCNav]->SetIonoUtc(NavData.GetGpsIono(), NavData.GetGpsUtcParam());
+	NavBitArray[DataBitCNav2]->SetIonoUtc(NavData.GetGpsIono(), NavData.GetGpsUtcParam());
+	NavBitArray[DataBitD1D2]->SetIonoUtc(NavData.GetBdsIono(), NavData.GetBdsUtcParam());
+	NavBitArray[DataBitINav]->SetIonoUtc(NavData.GetGalileoIono(), NavData.GetGalileoUtcParam());
+	NavBitArray[DataBitFNav]->SetIonoUtc(NavData.GetGalileoIono(), NavData.GetGalileoUtcParam());
+
+	for (int i = 1; i <= TOTAL_GPS_SAT; ++i)
+	{
+		GpsEph[i - 1] = NavData.FindEphemeris(GpsSystem, CurTime, i);
+		NavBitArray[DataBitLNav]->SetEphemeris(i, GpsEph[i - 1]);
+		NavBitArray[DataBitCNav]->SetEphemeris(i, GpsEph[i - 1]);
+		NavBitArray[DataBitCNav2]->SetEphemeris(i, GpsEph[i - 1]);
+	}
+	for (int i = 1; i <= TOTAL_BDS_SAT; ++i)
+	{
+		BdsEph[i - 1] = NavData.FindEphemeris(BdsSystem, BdsTime, i);
+		NavBitArray[DataBitD1D2]->SetEphemeris(i, BdsEph[i - 1]);
+		NavBitArray[DataBitBCNav1]->SetEphemeris(i, BdsEph[i - 1]);
+		NavBitArray[DataBitBCNav2]->SetEphemeris(i, BdsEph[i - 1]);
+		NavBitArray[DataBitBCNav3]->SetEphemeris(i, BdsEph[i - 1]);
+	}
+	for (int i = 1; i <= TOTAL_GAL_SAT; ++i)
+	{
+		GalEph[i - 1] = NavData.FindEphemeris(GalileoSystem, CurTime, i);
+		NavBitArray[DataBitINav]->SetEphemeris(i, GalEph[i - 1]);
+		NavBitArray[DataBitFNav]->SetEphemeris(i, GalEph[i - 1]);
+	}
+	for (int i = 1; i <= TOTAL_GLO_SAT; ++i)
+	{
+		GloEph[i - 1] = NavData.FindGloEphemeris(GlonassTime, i);
+		NavBitArray[DataBitGNav]->SetEphemeris(i, (PGPS_EPHEMERIS)GloEph[i - 1]);
+	}
+	NavData.CompleteAlmanac(BdsSystem, UtcTime);
+	NavData.CompleteAlmanac(GalileoSystem, UtcTime);
+	NavBitArray[DataBitLNav]->SetAlmanac(NavData.GetGpsAlmanac());
+	NavBitArray[DataBitCNav]->SetAlmanac(NavData.GetGpsAlmanac());
+	NavBitArray[DataBitCNav2]->SetAlmanac(NavData.GetGpsAlmanac());
+	NavBitArray[DataBitD1D2]->SetAlmanac(NavData.GetBdsAlmanac());
+	NavBitArray[DataBitBCNav1]->SetAlmanac(NavData.GetBdsAlmanac());
+	NavBitArray[DataBitBCNav2]->SetAlmanac(NavData.GetBdsAlmanac());
+	NavBitArray[DataBitBCNav3]->SetAlmanac(NavData.GetBdsAlmanac());
+	NavBitArray[DataBitINav]->SetAlmanac(NavData.GetGalileoAlmanac());
+	NavBitArray[DataBitFNav]->SetAlmanac(NavData.GetGalileoAlmanac());
+	NavBitArray[DataBitGNav]->SetAlmanac((PGPS_ALMANAC)NavData.GetGlonassAlmanac());
+
+	GpsSatNumber = (OutputParam.FreqSelect[GpsSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, GpsSystem, GpsEph, TOTAL_GPS_SAT, GpsEphVisible) : 0;
+	BdsSatNumber = (OutputParam.FreqSelect[BdsSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, BdsSystem, BdsEph, TOTAL_BDS_SAT, BdsEphVisible) : 0;
+	GalSatNumber = (OutputParam.FreqSelect[GalileoSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, GalileoSystem, GalEph, TOTAL_GAL_SAT, GalEphVisible) : 0;
+	GloSatNumber = (OutputParam.FreqSelect[GlonassSystem]) ? GetGlonassVisibleSatellite(CurPos, GlonassTime, OutputParam, GloEph, TOTAL_GLO_SAT, GloEphVisible) : 0;
+
+	CIonoKlobuchar8 IonoModel(NavData.GetGpsIono());
+	for (int i = 0; i < TOTAL_GPS_SAT; ++i)
+		GpsSatParam[i].Initialize(GpsSystem, GpsEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
+	for (int i = 0; i < TOTAL_BDS_SAT; ++i)
+		BdsSatParam[i].Initialize(BdsSystem, BdsEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
+	for (int i = 0; i < TOTAL_GAL_SAT; ++i)
+		GalSatParam[i].Initialize(GalileoSystem, GalEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
+	for (int i = 0; i < TOTAL_GLO_SAT; ++i)
+		GloSatParam[i].Initialize(GlonassSystem, (PGPS_EPHEMERIS)GloEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
+
+	PSIGNAL_POWER PowerList = NULL;
+	int ListCount = PowerControl.GetPowerControlList(0, PowerList);
+	UpdateSatParamList(CurTime, CurPos, ListCount, PowerList, NavData.GetGpsIono());
+
+	printf("[INFO]\tGenerating LS3W data with following satellite signals:\n\n");
+	printf("[INFO]\tEnabled Signals:\n");
+	for (size_t i = 0; i < Ls3wPathConfigs.size(); ++i)
+	{
+		printf("\tLS3W path %zu: [ center %.3f MHz, bandwidth %.3f MHz ] ",
+			i, Ls3wPathConfigs[i].CenterHz / 1e6, Ls3wPathConfigs[i].BandwidthHz / 1e6);
+		PrintLs3wPathSignalSelect(Ls3wPathConfigs[i]);
+		printf("\n");
+	}
+	printf("\n");
+
+	std::vector<Ls3wPathRuntime> Paths(Ls3wPathConfigs.size());
+	for (size_t i = 0; i < Ls3wPathConfigs.size(); ++i)
+	{
+		Paths[i].Config = Ls3wPathConfigs[i];
+		Paths[i].NoiseSeed = 1U + (unsigned int)i * 12345U;
+		AppendSignalsForLs3wPath(Paths[i], i, NavBitArray);
+		printf("[INFO]\tLS3W path %zu: total signal streams = %zu\n\n",
+			i, Paths[i].Signals.size());
+	}
+
+	int DurationMs = (int)(Trajectory.GetTimeLength() * 1000 + 0.5);
+	long long SampleCount = (long long)DurationMs * OutputParam.SampleFreq;
+	unsigned int FrameBits = (unsigned int)(Paths.size() * QuantBits * 2);
+	unsigned int SamplesPerWord = 64U / FrameBits;
+	unsigned int SpareBits = 64U - SamplesPerWord * FrameBits;
+	long long RegisterCount = (SampleCount + SamplesPerWord - 1) / SamplesPerWord;
+	uint64_t OutputBytes = (uint64_t)RegisterCount * 8U;
+	std::string Duration = FormatDurationMs(DurationMs);
+	double TotalMB = OutputBytes / (1024.0 * 1024.0);
+
+	for (size_t i = 0; i < Paths.size(); ++i)
+		Paths[i].Samples.resize(OutputParam.SampleFreq);
+
+	printf("[INFO]\tSignal Duration: %0.2f s (%s)\n", DurationMs / 1000.0, Duration.c_str());
+	printf("[INFO]\tSignal Size: %.2f MB\n", TotalMB);
+	printf("[INFO]\tSignal Data format: LS3W%d\n", QuantBits);
+	printf("[INFO]\tSignal Sample rate: %0.4f MHz\n", OutputParam.SampleFreq / 1000.0);
+	printf("[INFO]\tLS3W paths: %zu, sample frame bits: %u, samples per 64-bit word: %u\n\n",
+		Paths.size(), FrameBits, SamplesPerWord);
+
+	if (!WriteLs3wIni(OutputParam.filename, Ls3wPathConfigs, QuantBits))
+		return 1;
+
+	if (Arguments.ValidateOnly)
+	{
+		for (size_t ch = 0; ch < Paths.size(); ++ch)
+			for (size_t n = 0; n < Paths[ch].Signals.size(); ++n)
+				delete Paths[ch].Signals[n];
+		for (int i = 0; i < (int)(sizeof(NavBitArray) / sizeof(NavBitArray[0])); ++i)
+			delete NavBitArray[i];
+		printf("Configuration validation completed\n");
+		return 0;
+	}
+
+	printf("[INFO]\tOpening output file: %s\n", OutputParam.filename);
+	FILE *File = fopen(OutputParam.filename, "wb");
+	if (!File)
+	{
+		printf("[ERROR]\tFailed to open output file: %s\n", OutputParam.filename);
+		return 1;
+	}
+	printf("[INFO]\tOutput file opened successfully.\n");
+
+#ifdef _OPENMP
+	if (Arguments.MultiThread)
+		printf("[INFO]\tLS3W generation uses OpenMP (%zu path worker threads + 1 writer thread, %d threads available)\n",
+			Paths.size(), omp_get_max_threads());
+	else
+		printf("[INFO]\tLS3W path generation uses single thread\n");
+#else
+	if (Arguments.MultiThread)
+		printf("[WARNING]\tParallel execution requested but OpenMP not available - using sequential processing\n");
+	else
+		printf("[INFO]\tLS3W path generation uses single thread\n");
+#endif
+	printf("[INFO]\tStarting signal generation loop...\n");
+
+	auto StartTime = std::chrono::high_resolution_clock::now();
+	uint64_t Word = 0;
+	unsigned int SamplesInWord = 0;
+	int PathCount = (int)Paths.size();
+	int MsGenerated = 0;
+	int NextProgressMs = 1000;
+#ifdef _OPENMP
+	if (Arguments.MultiThread)
+	{
+		#pragma omp parallel num_threads(PathCount + 1)
+		{
+			int ThreadIndex = omp_get_thread_num();
+			for (int ms = 0; ms < DurationMs; ++ms)
+			{
+				if (ThreadIndex == 0)
+					StepToNextMs();
+				#pragma omp barrier
+				if (ThreadIndex > 0 && ThreadIndex <= PathCount)
+				{
+					int ch = ThreadIndex - 1;
+					for (int s = 0; s < OutputParam.SampleFreq; ++s)
+						Paths[ch].Samples[s] = complex_number(0.0, 0.0);
+					for (size_t n = 0; n < Paths[ch].Signals.size(); ++n)
+					{
+						Paths[ch].Signals[n]->GetIfSample(CurTime);
+						for (int s = 0; s < OutputParam.SampleFreq; ++s)
+							Paths[ch].Samples[s] += Paths[ch].Signals[n]->SampleArray[s];
+					}
+				}
+				#pragma omp barrier
+				if (ThreadIndex == 0)
+				{
+					for (int s = 0; s < OutputParam.SampleFreq; ++s)
+					{
+						unsigned int BitPos = SpareBits + SamplesInWord * FrameBits;
+						for (size_t ch = 0; ch < Paths.size(); ++ch)
+						{
+							PutBitsMsb(Word, BitPos, QuantizeLs3w(Paths[ch].Samples[s].real, QuantBits), QuantBits);
+							BitPos += QuantBits;
+							PutBitsMsb(Word, BitPos, QuantizeLs3w(Paths[ch].Samples[s].imag, QuantBits), QuantBits);
+							BitPos += QuantBits;
+						}
+						if (++SamplesInWord == SamplesPerWord)
+						{
+							WriteLe64(File, Word);
+							SamplesInWord = 0;
+							Word = 0;
+						}
+					}
+					MsGenerated = ms + 1;
+					if (MsGenerated >= NextProgressMs || MsGenerated == DurationMs)
+					{
+						auto Now = std::chrono::high_resolution_clock::now();
+						double Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Now - StartTime).count() / 1000.0;
+						double Percent = (double)MsGenerated * 100.0 / DurationMs;
+						printf("\r[INFO]\tLS3W %.1f%% %d/%d ms %.2f MSps effective   ",
+							Percent, MsGenerated, DurationMs,
+							Elapsed > 0 ? (MsGenerated * (double)OutputParam.SampleFreq) / (Elapsed * 1000000.0) : 0.0);
+						fflush(stdout);
+						while (NextProgressMs <= MsGenerated)
+							NextProgressMs += 1000;
+					}
+				}
+				#pragma omp barrier
+			}
+		}
+	}
+	else
+#endif
+	{
+		for (int ms = 0; ms < DurationMs; ++ms)
+		{
+			StepToNextMs();
+			for (int ch = 0; ch < PathCount; ++ch)
+			{
+				for (int s = 0; s < OutputParam.SampleFreq; ++s)
+					Paths[ch].Samples[s] = complex_number(0.0, 0.0);
+				for (size_t n = 0; n < Paths[ch].Signals.size(); ++n)
+				{
+					Paths[ch].Signals[n]->GetIfSample(CurTime);
+					for (int s = 0; s < OutputParam.SampleFreq; ++s)
+						Paths[ch].Samples[s] += Paths[ch].Signals[n]->SampleArray[s];
+				}
+			}
+			for (int s = 0; s < OutputParam.SampleFreq; ++s)
+			{
+				unsigned int BitPos = SpareBits + SamplesInWord * FrameBits;
+				for (size_t ch = 0; ch < Paths.size(); ++ch)
+				{
+					PutBitsMsb(Word, BitPos, QuantizeLs3w(Paths[ch].Samples[s].real, QuantBits), QuantBits);
+					BitPos += QuantBits;
+					PutBitsMsb(Word, BitPos, QuantizeLs3w(Paths[ch].Samples[s].imag, QuantBits), QuantBits);
+					BitPos += QuantBits;
+				}
+				if (++SamplesInWord == SamplesPerWord)
+				{
+					WriteLe64(File, Word);
+					SamplesInWord = 0;
+					Word = 0;
+				}
+			}
+			MsGenerated = ms + 1;
+			if (MsGenerated >= NextProgressMs || MsGenerated == DurationMs)
+			{
+				auto Now = std::chrono::high_resolution_clock::now();
+				double Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Now - StartTime).count() / 1000.0;
+				double Percent = (double)MsGenerated * 100.0 / DurationMs;
+				printf("\r[INFO]\tLS3W %.1f%% %d/%d ms %.2f MSps effective   ",
+					Percent, MsGenerated, DurationMs,
+					Elapsed > 0 ? (MsGenerated * (double)OutputParam.SampleFreq) / (Elapsed * 1000000.0) : 0.0);
+				fflush(stdout);
+				while (NextProgressMs <= MsGenerated)
+					NextProgressMs += 1000;
+			}
+		}
+	}
+	if (SamplesInWord)
+		WriteLe64(File, Word);
+	fclose(File);
+	auto EndTime = std::chrono::high_resolution_clock::now();
+	double Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(EndTime - StartTime).count() / 1000.0;
+
+	printf("\n\n[INFO]\tLS3W Signal generation completed!\n");
+	printf("------------------------------------------------------------------\n");
+	printf("[INFO]\tTotal samples: %lld\n", SampleCount);
+	printf("[INFO]\tData generated: %.2f MB\n", TotalMB);
+	printf("[INFO]\tTotal time taken: %0.2f s\n", Elapsed);
+	printf("[INFO]\tEffective sample rate: %.2f MSps\n",
+		Elapsed > 0.0 ? (DurationMs * (double)OutputParam.SampleFreq) / (Elapsed * 1000000.0) : 0.0);
+	printf("------------------------------------------------------------------\n\n");
+
+	for (size_t ch = 0; ch < Paths.size(); ++ch)
+		for (size_t n = 0; n < Paths[ch].Signals.size(); ++n)
+			delete Paths[ch].Signals[n];
+	for (int i = 0; i < (int)(sizeof(NavBitArray) / sizeof(NavBitArray[0])); ++i)
+		delete NavBitArray[i];
+	return 0;
+}
+
 void UpdateSatParamList(GNSS_TIME CurTime, KINEMATIC_INFO CurPos, int ListCount, PSIGNAL_POWER PowerList, PIONO_PARAM IonoParam)
 {
 	int i, index;
@@ -859,6 +1608,21 @@ complex_number GenerateNoise(double Sigma)
         fvalue2 = 2.0 * ((double)rand() / RAND_MAX) - 1.0;
         mag = fvalue1 * fvalue1 + fvalue2 * fvalue2;
     } while (mag >= 1.0 || mag == 0.0);
+	mag = sqrt(-2.0 * log(mag) / mag) * Sigma;
+
+	return complex_number(fvalue1 * mag, fvalue2 * mag);
+}
+
+complex_number GenerateNoise(unsigned int &Seed, double Sigma)
+{
+	double fvalue1, fvalue2, mag;
+
+	do
+	{
+		fvalue1 = 2.0 * ((double)rand_r(&Seed) / RAND_MAX) - 1.0;
+		fvalue2 = 2.0 * ((double)rand_r(&Seed) / RAND_MAX) - 1.0;
+		mag = fvalue1 * fvalue1 + fvalue2 * fvalue2;
+	} while (mag >= 1.0 || mag == 0.0);
 	mag = sqrt(-2.0 * log(mag) / mag) * Sigma;
 
 	return complex_number(fvalue1 * mag, fvalue2 * mag);
