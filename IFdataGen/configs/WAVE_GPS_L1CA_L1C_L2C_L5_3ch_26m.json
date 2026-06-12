@@ -1,0 +1,96 @@
+{
+  "version": 1.0,
+  "description": "WAVE output: GPS L1CA/L1C/L2C/L5 in 3 RF channels at 26 Msps",
+  "time": {
+    "type": "UTC",
+    "year": 2021,
+    "month": 6,
+    "day": 19,
+    "hour": 0,
+    "minute": 0,
+    "second": 0
+  },
+  "trajectory": {
+    "name": "static gps l1ca l1c l2c l5 3ch 26m",
+    "initPosition": {
+      "type": "LLA",
+      "format": "d",
+      "longitude": 116.471006,
+      "latitude": 40.019450,
+      "altitude": 20
+    },
+    "initVelocity": {
+      "type": "SCU",
+      "speed": 0,
+      "course": 0
+    },
+    "trajectoryList": [
+      {
+        "type": "Const",
+        "time": 180.0
+      }
+    ]
+  },
+  "ephemeris": {
+    "type": "RINEX",
+    "name": "../EphData/BRDC00IGS_R_20211700000_01D_MN.rnx"
+  },
+  "output": {
+    "type": "IFdata",
+    "format": "WAVE",
+    "sampleFreq": 26.0,
+    "name": "GPS_L1CA_L1C_L2C_L5_3ch_26m_180s_3bit.wave",
+    "quantBits": 3,
+    "ls3wPaths": [
+      {
+        "centerFreq": 1575.42,
+        "bandwidth": 20.8,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L1CA",
+            "enable": true
+          },
+          {
+            "system": "GPS",
+            "signal": "L1C",
+            "enable": true
+          }
+        ]
+      },
+      {
+        "centerFreq": 1227.60,
+        "bandwidth": 20.8,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L2C",
+            "enable": true
+          }
+        ]
+      },
+      {
+        "centerFreq": 1176.45,
+        "bandwidth": 20.8,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L5",
+            "enable": true
+          }
+        ]
+      }
+    ],
+    "config": {
+      "elevationMask": 3
+    }
+  },
+  "power": {
+    "noiseFloor": -172,
+    "initPower": {
+      "unit": "dBHz",
+      "value": 60
+    },
+    "elevationAdjust": false
+  }
+}

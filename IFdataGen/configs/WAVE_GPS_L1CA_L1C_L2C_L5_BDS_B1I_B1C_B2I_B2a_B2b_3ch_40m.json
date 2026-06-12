@@ -1,0 +1,121 @@
+{
+  "version": 1.0,
+  "description": "WAVE output: GPS L1CA/L1C/L2C/L5 and BeiDou B1I/B1C/B2I/B2a/B2b in 3 RF channels at 40 Msps",
+  "time": {
+    "type": "UTC",
+    "year": 2021,
+    "month": 6,
+    "day": 19,
+    "hour": 0,
+    "minute": 0,
+    "second": 0
+  },
+  "trajectory": {
+    "name": "static gps l1ca l1c l2c l5 bds b1i b1c b2i b2a b2b 3ch 40m",
+    "initPosition": {
+      "type": "LLA",
+      "format": "d",
+      "longitude": 116.471006,
+      "latitude": 40.019450,
+      "altitude": 20
+    },
+    "initVelocity": {
+      "type": "SCU",
+      "speed": 0,
+      "course": 0
+    },
+    "trajectoryList": [
+      {
+        "type": "Const",
+        "time": 180.0
+      }
+    ]
+  },
+  "ephemeris": {
+    "type": "RINEX",
+    "name": "../EphData/BRDC00IGS_R_20211700000_01D_MN.rnx"
+  },
+  "output": {
+    "type": "IFdata",
+    "format": "WAVE",
+    "sampleFreq": 40.0,
+    "name": "GPS_L1CA_L1C_L2C_L5_BDS_B1I_B1C_B2I_B2a_B2b_3ch_40m_180s_3bit.wave",
+    "quantBits": 3,
+    "ls3wPaths": [
+      {
+        "centerFreq": 1568.259,
+        "bandwidth": 32.0,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L1CA",
+            "enable": true
+          },
+          {
+            "system": "GPS",
+            "signal": "L1C",
+            "enable": true
+          },
+          {
+            "system": "BDS",
+            "signal": "B1I",
+            "enable": true
+          },
+          {
+            "system": "BDS",
+            "signal": "B1C",
+            "enable": true
+          }
+        ]
+      },
+      {
+        "centerFreq": 1217.370,
+        "bandwidth": 32.0,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L2C",
+            "enable": true
+          },
+          {
+            "system": "BDS",
+            "signal": "B2I",
+            "enable": true
+          },
+          {
+            "system": "BDS",
+            "signal": "B2b",
+            "enable": true
+          }
+        ]
+      },
+      {
+        "centerFreq": 1176.45,
+        "bandwidth": 32.0,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L5",
+            "enable": true
+          },
+          {
+            "system": "BDS",
+            "signal": "B2a",
+            "enable": true
+          }
+        ]
+      }
+    ],
+    "config": {
+      "elevationMask": 3
+    }
+  },
+  "power": {
+    "noiseFloor": -172,
+    "initPower": {
+      "unit": "dBHz",
+      "value": 60
+    },
+    "elevationAdjust": false
+  }
+}

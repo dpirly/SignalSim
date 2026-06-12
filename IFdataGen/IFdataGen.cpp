@@ -22,6 +22,16 @@ static int rand_r(unsigned int* seed)
 	*seed = *seed * 1103515245u + 12345u;
 	return (int)((*seed >> 16) & 0x7fff);
 }
+
+static int64_t GetFileOffset(FILE *File)
+{
+	return _ftelli64(File);
+}
+#else
+static int64_t GetFileOffset(FILE *File)
+{
+	return ftello(File);
+}
 #endif
 
 #define TOTAL_GPS_SAT 32
@@ -160,7 +170,7 @@ int main(int argc, char* argv[])
 		printf("[INFO]\tUsing output file from command line: %s\n", OutputParam.filename);
 	}
 
-	if (OutputParam.Format == OutputFormatLS3W)
+	if (OutputParam.Format == OutputFormatLS3W || OutputParam.Format == OutputFormatWAVE)
 		return RunLs3wOutput(Object, Arguments, UtcTime, StartPos, StartVel);
 
 	// Validate configuration and exit if requested
@@ -1043,6 +1053,143 @@ static bool WriteLs3wIni(const char *OutputFileName, const std::vector<Ls3wPathC
 	return true;
 }
 
+static std::string XmlEscape(const std::string &Text)
+{
+	std::string Escaped;
+	for (size_t i = 0; i < Text.size(); ++i)
+	{
+		switch (Text[i])
+		{
+		case '&': Escaped += "&amp;"; break;
+		case '<': Escaped += "&lt;"; break;
+		case '>': Escaped += "&gt;"; break;
+		case '"': Escaped += "&quot;"; break;
+		case '\'': Escaped += "&apos;"; break;
+		default: Escaped += Text[i]; break;
+		}
+	}
+	return Escaped;
+}
+
+static std::string BuildWaveInfoXml(const std::vector<Ls3wPathConfig> &Paths, int QuantBits,
+	long long SampleCount, const std::string &Duration, const char *DataName)
+{
+	char Buffer[256];
+	std::string Xml = "<?xml version='1.0' encoding='UTF-8'?>\n";
+	Xml += "<info version=\"1\" type=\"MCH\">\n";
+	snprintf(Buffer, sizeof(Buffer), "  <SEGMENT_CLOCK>%d</SEGMENT_CLOCK>\n", OutputParam.SampleFreq * 1000);
+	Xml += Buffer;
+	Xml += "  <SEGMENT_COUNT>1</SEGMENT_COUNT>\n";
+	snprintf(Buffer, sizeof(Buffer), "  <SEGMENT_LENGTH>%lld</SEGMENT_LENGTH>\n", SampleCount);
+	Xml += Buffer;
+	Xml += "  <SEGMENT_START>0</SEGMENT_START>\n";
+	Xml += "  <DURATION>" + Duration + "</DURATION>\n";
+	Xml += "  <WAVEFORM>" + XmlEscape(DataName) + "</WAVEFORM>\n";
+	snprintf(Buffer, sizeof(Buffer), "  <QUANT_BITS>%d</QUANT_BITS>\n", QuantBits);
+	Xml += Buffer;
+	snprintf(Buffer, sizeof(Buffer), "  <CHANNEL_COUNT>%zu</CHANNEL_COUNT>\n", Paths.size());
+	Xml += Buffer;
+	snprintf(Buffer, sizeof(Buffer), "  <SAMPLE_FRAME_BITS>%zu</SAMPLE_FRAME_BITS>\n", Paths.size() * QuantBits * 2);
+	Xml += Buffer;
+	std::string SignalList = BuildLs3wSignalList(Paths);
+	if (!SignalList.empty())
+		Xml += "  <SIGNAL>" + XmlEscape(SignalList) + "</SIGNAL>\n";
+	for (size_t i = 0; i < Paths.size(); ++i)
+	{
+		snprintf(Buffer, sizeof(Buffer), "  <CHANNEL index=\"%zu\">\n", i);
+		Xml += Buffer;
+		snprintf(Buffer, sizeof(Buffer), "    <CENTER>%d</CENTER>\n", Paths[i].CenterHz);
+		Xml += Buffer;
+		snprintf(Buffer, sizeof(Buffer), "    <BANDWIDTH>%d</BANDWIDTH>\n", Paths[i].BandwidthHz);
+		Xml += Buffer;
+		Xml += "  </CHANNEL>\n";
+	}
+	Xml += "</info>\n";
+	return Xml;
+}
+
+static void WriteTarNumber(char *Field, size_t FieldSize, unsigned long long Value)
+{
+	memset(Field, 0, FieldSize);
+	unsigned long long MaxOctal = 0;
+	for (size_t i = 0; i < FieldSize - 1; ++i)
+		MaxOctal = (MaxOctal << 3) | 7ULL;
+	if (Value <= MaxOctal)
+	{
+		snprintf(Field, FieldSize, "%0*llo", (int)FieldSize - 1, Value);
+		return;
+	}
+
+	for (size_t i = 0; i < FieldSize; ++i)
+	{
+		Field[FieldSize - 1 - i] = (char)(Value & 0xffU);
+		Value >>= 8;
+	}
+	Field[0] |= (char)0x80;
+}
+
+static bool WriteTarHeader(FILE *File, const char *Name, uint64_t Size)
+{
+	if (strlen(Name) > 100)
+	{
+		printf("[ERROR]\tTar member name is too long: %s\n", Name);
+		return false;
+	}
+
+	char Header[512];
+	memset(Header, 0, sizeof(Header));
+	memcpy(Header, Name, strlen(Name));
+	WriteTarNumber(Header + 100, 8, 0644);
+	WriteTarNumber(Header + 108, 8, 0);
+	WriteTarNumber(Header + 116, 8, 0);
+	WriteTarNumber(Header + 124, 12, Size);
+	WriteTarNumber(Header + 136, 12, 0);
+	memset(Header + 148, ' ', 8);
+	Header[156] = '0';
+	memcpy(Header + 257, "ustar", 5);
+	memcpy(Header + 263, "00", 2);
+
+	unsigned int Checksum = 0;
+	for (size_t i = 0; i < sizeof(Header); ++i)
+		Checksum += (unsigned char)Header[i];
+	snprintf(Header + 148, 8, "%06o", Checksum);
+	Header[154] = '\0';
+	Header[155] = ' ';
+	return fwrite(Header, 1, sizeof(Header), File) == sizeof(Header);
+}
+
+static bool WriteTarData(FILE *File, const void *Data, uint64_t Size)
+{
+	if (Size && fwrite(Data, 1, (size_t)Size, File) != Size)
+		return false;
+	uint64_t PadSize = (512 - (Size % 512)) % 512;
+	if (PadSize)
+	{
+		char Pad[512] = {0};
+		if (fwrite(Pad, 1, (size_t)PadSize, File) != PadSize)
+			return false;
+	}
+	return true;
+}
+
+static bool FinishTarMember(FILE *File, uint64_t Size)
+{
+	uint64_t PadSize = (512 - (Size % 512)) % 512;
+	if (PadSize)
+	{
+		char Pad[512] = {0};
+		if (fwrite(Pad, 1, (size_t)PadSize, File) != PadSize)
+			return false;
+	}
+	return true;
+}
+
+static bool FinishTarFile(FILE *File)
+{
+	char End[1024] = {0};
+	return fwrite(End, 1, sizeof(End), File) == sizeof(End);
+}
+
 static void PrintLs3wPathSignalSelect(const Ls3wPathConfig &Channel)
 {
 	if (Channel.FreqSelect[GpsSystem])
@@ -1200,15 +1347,16 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 	UTC_TIME UtcTime, LLA_POSITION StartPos, LOCAL_SPEED StartVel)
 {
 	std::vector<Ls3wPathConfig> Ls3wPathConfigs;
+	bool WaveOutput = (OutputParam.Format == OutputFormatWAVE);
 	int QuantBits = ParseLs3wQuantBits(RootObject);
 	if (QuantBits < 0 || !ParseLs3wPaths(RootObject, Ls3wPathConfigs) || Ls3wPathConfigs.size() > 4)
 	{
-		printf("[ERROR]\tInvalid LS3W output config: require quantBits=1..4 and 1..4 ls3wPaths\n");
+		printf("[ERROR]\tInvalid LS3W/WAVE output config: require quantBits=1..4 and 1..4 ls3wPaths\n");
 		return 1;
 	}
 	if (OutputParam.SampleFreq <= 0 || OutputParam.filename[0] == 0)
 	{
-		printf("[ERROR]\tInvalid LS3W output config: sampleFreq and name are required\n");
+		printf("[ERROR]\tInvalid LS3W/WAVE output config: sampleFreq and name are required\n");
 		return 1;
 	}
 
@@ -1344,22 +1492,21 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 	unsigned int SamplesPerWord = 64U / FrameBits;
 	unsigned int SpareBits = 64U - SamplesPerWord * FrameBits;
 	long long RegisterCount = (SampleCount + SamplesPerWord - 1) / SamplesPerWord;
+	long long PackedSampleCount = RegisterCount * SamplesPerWord;
 	uint64_t OutputBytes = (uint64_t)RegisterCount * 8U;
 	std::string Duration = FormatDurationMs(DurationMs);
 	double TotalMB = OutputBytes / (1024.0 * 1024.0);
+	const char *FormatName = WaveOutput ? "WAVE" : "LS3W";
 
 	for (size_t i = 0; i < Paths.size(); ++i)
 		Paths[i].Samples.resize(OutputParam.SampleFreq);
 
 	printf("[INFO]\tSignal Duration: %0.2f s (%s)\n", DurationMs / 1000.0, Duration.c_str());
 	printf("[INFO]\tSignal Size: %.2f MB\n", TotalMB);
-	printf("[INFO]\tSignal Data format: LS3W%d\n", QuantBits);
+	printf("[INFO]\tSignal Data format: %s%d\n", FormatName, QuantBits);
 	printf("[INFO]\tSignal Sample rate: %0.4f MHz\n", OutputParam.SampleFreq / 1000.0);
 	printf("[INFO]\tLS3W paths: %zu, sample frame bits: %u, samples per 64-bit word: %u\n\n",
 		Paths.size(), FrameBits, SamplesPerWord);
-
-	if (!WriteLs3wIni(OutputParam.filename, Ls3wPathConfigs, QuantBits))
-		return 1;
 
 	if (Arguments.ValidateOnly)
 	{
@@ -1372,6 +1519,9 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 		return 0;
 	}
 
+	if (!WaveOutput && !WriteLs3wIni(OutputParam.filename, Ls3wPathConfigs, QuantBits))
+		return 1;
+
 	printf("[INFO]\tOpening output file: %s\n", OutputParam.filename);
 	FILE *File = fopen(OutputParam.filename, "wb");
 	if (!File)
@@ -1380,18 +1530,41 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 		return 1;
 	}
 	printf("[INFO]\tOutput file opened successfully.\n");
+	int64_t WaveDataStart = -1;
+	if (WaveOutput)
+	{
+		std::string Xml = BuildWaveInfoXml(Ls3wPathConfigs, QuantBits, PackedSampleCount,
+			Duration, "waveform.dat");
+		if (!WriteTarHeader(File, "info.xml", Xml.size()) ||
+			!WriteTarData(File, Xml.data(), Xml.size()) ||
+			!WriteTarHeader(File, "waveform.dat", OutputBytes))
+		{
+			fclose(File);
+			printf("[ERROR]\tFailed to write WAVE container header\n");
+			return 1;
+		}
+		WaveDataStart = GetFileOffset(File);
+		if (WaveDataStart < 0)
+		{
+			fclose(File);
+			printf("[ERROR]\tFailed to get WAVE waveform data offset\n");
+			return 1;
+		}
+		printf("[INFO]\tWAVE waveform.dat header size: %llu bytes\n",
+			(unsigned long long)OutputBytes);
+	}
 
 #ifdef _OPENMP
 	if (Arguments.MultiThread)
-		printf("[INFO]\tLS3W generation uses OpenMP (%zu path worker threads + 1 writer thread, %d threads available)\n",
-			Paths.size(), omp_get_max_threads());
+		printf("[INFO]\t%s generation uses OpenMP (%zu path worker threads + 1 writer thread, %d threads available)\n",
+			FormatName, Paths.size(), omp_get_max_threads());
 	else
-		printf("[INFO]\tLS3W path generation uses single thread\n");
+		printf("[INFO]\t%s path generation uses single thread\n", FormatName);
 #else
 	if (Arguments.MultiThread)
 		printf("[WARNING]\tParallel execution requested but OpenMP not available - using sequential processing\n");
 	else
-		printf("[INFO]\tLS3W path generation uses single thread\n");
+		printf("[INFO]\t%s path generation uses single thread\n", FormatName);
 #endif
 	printf("[INFO]\tStarting signal generation loop...\n");
 
@@ -1450,8 +1623,8 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 						auto Now = std::chrono::high_resolution_clock::now();
 						double Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Now - StartTime).count() / 1000.0;
 						double Percent = (double)MsGenerated * 100.0 / DurationMs;
-						printf("\r[INFO]\tLS3W %.1f%% %d/%d ms %.2f MSps effective   ",
-							Percent, MsGenerated, DurationMs,
+						printf("\r[INFO]\t%s %.1f%% %d/%d ms %.2f MSps effective   ",
+							FormatName, Percent, MsGenerated, DurationMs,
 							Elapsed > 0 ? (MsGenerated * (double)OutputParam.SampleFreq) / (Elapsed * 1000000.0) : 0.0);
 						fflush(stdout);
 						while (NextProgressMs <= MsGenerated)
@@ -1502,8 +1675,8 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 				auto Now = std::chrono::high_resolution_clock::now();
 				double Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Now - StartTime).count() / 1000.0;
 				double Percent = (double)MsGenerated * 100.0 / DurationMs;
-				printf("\r[INFO]\tLS3W %.1f%% %d/%d ms %.2f MSps effective   ",
-					Percent, MsGenerated, DurationMs,
+				printf("\r[INFO]\t%s %.1f%% %d/%d ms %.2f MSps effective   ",
+					FormatName, Percent, MsGenerated, DurationMs,
 					Elapsed > 0 ? (MsGenerated * (double)OutputParam.SampleFreq) / (Elapsed * 1000000.0) : 0.0);
 				fflush(stdout);
 				while (NextProgressMs <= MsGenerated)
@@ -1513,11 +1686,37 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 	}
 	if (SamplesInWord)
 		WriteLe64(File, Word);
+	if (WaveOutput)
+	{
+		int64_t WaveDataEnd = GetFileOffset(File);
+		if (WaveDataEnd < 0)
+		{
+			fclose(File);
+			printf("[ERROR]\tFailed to get WAVE waveform data end offset\n");
+			return 1;
+		}
+		uint64_t ActualBytes = (uint64_t)(WaveDataEnd - WaveDataStart);
+		if (ActualBytes != OutputBytes)
+		{
+			fclose(File);
+			printf("[ERROR]\tWAVE waveform.dat size mismatch: header=%llu actual=%llu bytes\n",
+				(unsigned long long)OutputBytes, (unsigned long long)ActualBytes);
+			return 1;
+		}
+		printf("[INFO]\tWAVE waveform.dat actual size: %llu bytes\n",
+			(unsigned long long)ActualBytes);
+	}
+	if (WaveOutput && (!FinishTarMember(File, OutputBytes) || !FinishTarFile(File)))
+	{
+		fclose(File);
+		printf("[ERROR]\tFailed to finish WAVE container\n");
+		return 1;
+	}
 	fclose(File);
 	auto EndTime = std::chrono::high_resolution_clock::now();
 	double Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(EndTime - StartTime).count() / 1000.0;
 
-	printf("\n\n[INFO]\tLS3W Signal generation completed!\n");
+	printf("\n\n[INFO]\t%s Signal generation completed!\n", FormatName);
 	printf("------------------------------------------------------------------\n");
 	printf("[INFO]\tTotal samples: %lld\n", SampleCount);
 	printf("[INFO]\tData generated: %.2f MB\n", TotalMB);
