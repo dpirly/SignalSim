@@ -1,70 +1,58 @@
 {
 	"version": 1.0,
-	"description": "test file for IF data generation",
+	"description": "QZSS L1 C/A IF data generation example",
 	"time": {
 		"type": "UTC",
-		"year": 2021,
-		"month": 6,
-		"day": 19,
+		"year": 2025,
+		"month": 1,
+		"day": 1,
 		"hour": 10,
 		"minute": 5,
 		"second": 30
 	},
 	"trajectory": {
-		"name": "test scenario",
+		"name": "qzss l1ca static scenario",
 		"initPosition": {
 			"type": "LLA",
 			"format": "d",
-			"longitude": -121.915773,
-			"latitude": 37.352721,
-			"altitude": 20
+			"longitude": 139.7414,
+			"latitude": 35.6586,
+			"altitude": 50
 		},
 		"initVelocity": {
 			"type": "SCU",
-			"speed": 5,
-			"course": 318.91
+			"speed": 0,
+			"course": 0
 		},
 		"trajectoryList": [
 			{
 				"type": "Const",
-				"time": 0.2
+				"time": 120
 			}
-			
 		]
 	},
 	"ephemeris": {
 		"type": "RINEX",
-		"name": "..\/EphData\/BRDC00IGS_R_20211700000_01D_MN.rnx"
+		"name": "../EphData/BRDC00IGS_R_20250010000_01D_MN.rnx"
 	},
 	"output": {
 		"type": "IFdata",
 		"format": "IQ8",
-		"sampleFreq": 4.092,
+		"sampleFreq": 4,
 		"centerFreq": 1575.42,
-		"name": "GPS_BDS_GAL_L1CA_L1C_B1C_E1.bin",
+		"name": "QZSS_L1CA.bin",
 		"config": {
 			"elevationMask": 3
-		},	
+		},
 		"systemSelect": [
 			{
 				"system": "GPS",
 				"signal": "L1CA",
-				"enable": true
+				"enable": false
 			},
 			{
-				"system": "GPS",
-				"signal": "L1C",
-				"enable": true
-			},
-			
-			{
-				"system": "BDS",
-				"signal": "B1C",
-				"enable": true
-			},
-			{
-				"system": "Galileo",
-				"signal": "E1",
+				"system": "QZSS",
+				"signal": "L1CA",
 				"enable": true
 			}
 		]

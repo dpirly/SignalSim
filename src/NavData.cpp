@@ -17,17 +17,19 @@
 
 CNavData::CNavData()
 {
-	GpsEphemerisNumber = BdsEphemerisNumber = GalileoEphemerisNumber = GlonassEphemerisNumber = 0;
+	GpsEphemerisNumber = BdsEphemerisNumber = GalileoEphemerisNumber = GlonassEphemerisNumber = QzssEphemerisNumber = 0;
 	GpsEphemerisPool = (PGPS_EPHEMERIS)malloc(sizeof(GPS_EPHEMERIS) * EPH_NUMBER_INIT);
 	BdsEphemerisPool = (PGPS_EPHEMERIS)malloc(sizeof(GPS_EPHEMERIS) * EPH_NUMBER_INIT);
 	GalileoEphemerisPool = (PGPS_EPHEMERIS)malloc(sizeof(GPS_EPHEMERIS) * EPH_NUMBER_INIT);
 	GlonassEphemerisPool = (PGLONASS_EPHEMERIS)malloc(sizeof(GLONASS_EPHEMERIS) * EPH_NUMBER_INIT);
-	GpsEphemerisPoolSize = BdsEphemerisPoolSize = GalileoEphemerisPoolSize = GlonassEphemerisPoolSize = EPH_NUMBER_INIT;
+	QzssEphemerisPool = (PGPS_EPHEMERIS)malloc(sizeof(GPS_EPHEMERIS) * EPH_NUMBER_INIT);
+	GpsEphemerisPoolSize = BdsEphemerisPoolSize = GalileoEphemerisPoolSize = GlonassEphemerisPoolSize = QzssEphemerisPoolSize = EPH_NUMBER_INIT;
 	memset(&GpsUtcParam, 0, sizeof(UTC_PARAM));
 	memset(GpsAlmanac, 0, sizeof(GpsAlmanac));
 	memset(BdsAlmanac, 0, sizeof(BdsAlmanac));
 	memset(GalileoAlmanac, 0, sizeof(GalileoAlmanac));
 	memset(GlonassAlmanac, 0, sizeof(GlonassAlmanac));
+	memset(QzssAlmanac, 0, sizeof(QzssAlmanac));
 	// set default FreqID for each glonass SLOT
 	GlonassSlotFreq[ 0] =  1; GlonassSlotFreq[ 1] = -4; GlonassSlotFreq[ 2] =  5; GlonassSlotFreq[ 3] =  6;
 	GlonassSlotFreq[ 4] =  1; GlonassSlotFreq[ 5] = -4; GlonassSlotFreq[ 6] =  5; GlonassSlotFreq[ 7] =  6;
@@ -43,6 +45,7 @@ CNavData::~CNavData()
 	free(BdsEphemerisPool);
 	free(GalileoEphemerisPool);
 	free(GlonassEphemerisPool);
+	free(QzssEphemerisPool);
 }
 
 NavFileType CNavData::CheckNavFileType(FILE *fp)
@@ -132,6 +135,20 @@ bool CNavData::AddNavData(NavDataType Type, void *NavData)
 		}
 		memcpy(&GpsEphemerisPool[GpsEphemerisNumber], NavData, sizeof(GPS_EPHEMERIS));
 		GpsEphemerisNumber ++;
+		break;
+	case NavDataQzssLnav:
+	case NavDataQzssCnav:
+	case NavDataQzssCnav2:
+		if (QzssEphemerisNumber == QzssEphemerisPoolSize)
+		{
+			QzssEphemerisPoolSize *= 2;
+			NewEphmerisPool = (PGPS_EPHEMERIS)realloc(QzssEphemerisPool, sizeof(GPS_EPHEMERIS) * QzssEphemerisPoolSize);
+			if (NewEphmerisPool == NULL)
+				return false;
+			QzssEphemerisPool = NewEphmerisPool;
+		}
+		memcpy(&QzssEphemerisPool[QzssEphemerisNumber], NavData, sizeof(GPS_EPHEMERIS));
+		QzssEphemerisNumber ++;
 		break;
 	case NavDataBdsD1D2:
 	case NavDataBdsCnav1:
@@ -227,6 +244,11 @@ PGPS_EPHEMERIS CNavData::FindEphemeris(GnssSystem system, GNSS_TIME time, int sv
 		EphemerisNumber = GalileoEphemerisNumber;
 		Week -= 1024;
 	}
+	else if (system == QzssSystem)
+	{
+		EphemerisPool = QzssEphemerisPool;
+		EphemerisNumber = QzssEphemerisNumber;
+	}
 	else
 		return (PGPS_EPHEMERIS)0;
 
@@ -234,8 +256,8 @@ PGPS_EPHEMERIS CNavData::FindEphemeris(GnssSystem system, GNSS_TIME time, int sv
 	{
 		if (svid != EphemerisPool[i].svid)	// not same svid
 			continue;
-		if (EphemerisPool[i].health != 0)
-			continue;
+			if (system != QzssSystem && EphemerisPool[i].health != 0)
+				continue;
 /*		if ((system == GpsSystem) && (EphemerisPool[i].toe % 1200) != 0)	// filter out toe not multiple of 2^4 and 300
 			continue;
 		else if ((system == BdsSystem) && (EphemerisPool[i].toe % 600) != 0)	// filter out toe not multiple of 2^3 and 300
@@ -399,6 +421,12 @@ void CNavData::CompleteAlmanac(GnssSystem system, UTC_TIME time)
 		gnss_time = UtcToGpsTime(time);
 		toa_scale = 600;	// Galileo toa scale factor is 600s
 	}
+	else if (system == QzssSystem)
+	{
+		Almanac = QzssAlmanac;
+		AlmanacNumber = QzssSatNumber;
+		gnss_time = UtcToGpsTime(time);
+	}
 	else if (system == GlonassSystem)
 	{
 		glonass_time = UtcToGlonassTime(time);
@@ -429,7 +457,7 @@ void CNavData::CompleteAlmanac(GnssSystem system, UTC_TIME time)
 	{
 		if (Almanac[i].valid & 1)
 			continue;
-		if ((Eph = FindEphemeris(system, gnss_time, i + 1, 1)) == NULL)
+		if ((Eph = FindEphemeris(system, gnss_time, (system == QzssSystem) ? (193 + i) : (i + 1), 1)) == NULL)
 			continue;
 		Almanac[i] = GetAlmanacFromEphemeris(Eph, week, toa);
 	}

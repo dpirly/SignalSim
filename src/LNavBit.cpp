@@ -57,8 +57,8 @@ int LNavBit::GetFrameData(GNSS_TIME StartTime, int svid, int Param, int *NavBits
 		page = (TOW / 5) % 25;
 		Stream = GpsStream45[subframe-4][page];
 	}
-	else if (svid >= 1 && svid <= 32)
-		Stream = GpsStream123[svid-1] + (subframe - 1) * 8;
+	else if (MapSvidToIndex(svid) >= 0)
+		Stream = GpsStream123[MapSvidToIndex(svid)] + (subframe - 1) * 8;
 	else
 		return 1;
 
@@ -101,9 +101,10 @@ int LNavBit::GetFrameData(GNSS_TIME StartTime, int svid, int Param, int *NavBits
 
 int LNavBit::SetEphemeris(int svid, PGPS_EPHEMERIS Eph)
 {
-	if (svid < 1 || svid > 32 || !Eph || !Eph->valid)
+	int index = MapSvidToIndex(svid);
+	if (index < 0 || !Eph || !Eph->valid)
 		return 0;
-	ComposeGpsStream123(Eph, GpsStream123[svid-1]);
+	ComposeGpsStream123(Eph, GpsStream123[index]);
 	return svid;
 }
 
@@ -336,4 +337,13 @@ unsigned int LNavBit::GpsGetParity(unsigned int word)
 		parity ^= 0x29;
 
 	return parity;
+}
+
+int LNavBit::MapSvidToIndex(int svid)
+{
+	if (svid >= 1 && svid <= 32)
+		return svid - 1;
+	if (svid >= 193 && svid <= 202)
+		return svid - 193;
+	return -1;
 }

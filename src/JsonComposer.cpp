@@ -50,8 +50,8 @@
 #endif
 
 static const char *DictionaryListSystem[] = {
-//    0      1      2        3          4
-	"UTC", "GPS", "BDS", "Galileo", "GLONASS",
+//    0      1      2        3          4          5
+	"UTC", "GPS", "BDS", "Galileo", "GLONASS", "QZSS",
 };
 static const char *KeyDictionaryListTime[] = {
 //     0      1        2          3         4      5        6       7        8
@@ -81,6 +81,7 @@ static const char *DictionaryListSignal[] = {
 	"B1C", "B1I", "B2I", "B3I", "B2a", "B2b", "", "",
 	"E1",  "E5a", "E5b", "E5",  "E6",  "",    "", "",
 	"G1",  "G2",  "G3",  "",    "",    "",    "", "",
+	"L1CA","L1C", "L2C", "L2P", "L5",  "",    "", "",
 };
 #if 0
 static const char *KeyDictionaryListParam[] = {
@@ -546,7 +547,7 @@ JsonObject *ComposeMaskOut(GnssSystem System, unsigned long long MaskOut)
 {
 	JsonObject *Root = NULL, *SvListObject = NULL, *CurObject = NULL;
 	int SvNumber = (int)popcnt64(MaskOut);
-	int MaxSvid[] = { 32, 63, 36, 24 };
+	int MaxSvid[] = { 32, 63, 36, 24, 10 };
 
 	MaskOut &= (1ULL << MaxSvid[System]) - 1;
 	if (SvNumber == 0)
@@ -558,7 +559,7 @@ JsonObject *ComposeMaskOut(GnssSystem System, unsigned long long MaskOut)
 	CurObject = Root->GetFirstObject();
 	CurObject = AssignValue(CurObject, "system", DictionaryListSystem[System - GpsSystem + 1]);	// system
 	if (SvNumber == 1)
-		CurObject = AssignValue(CurObject, "svid", ctzll(MaskOut) + 1);	// signal
+		CurObject = AssignValue(CurObject, "svid", ctzll(MaskOut) + ((System == QzssSystem) ? 193 : 1));	// signal
 	else	// add a list
 	{
 		SvListObject = CreateObjects("svid", SvNumber);
@@ -573,7 +574,7 @@ JsonObject *ComposeMaskOut(GnssSystem System, unsigned long long MaskOut)
 		for (int i = 0; i < SvNumber; i ++)
 		{
 			int Pos = ctzll(MaskOut);
-			CurObject = AssignValue(CurObject, "", Pos + 1);
+			CurObject = AssignValue(CurObject, "", Pos + ((System == QzssSystem) ? 193 : 1));
 			MaskOut &= ~(1ULL << Pos);
 		}
 	}

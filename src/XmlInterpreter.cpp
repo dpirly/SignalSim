@@ -261,13 +261,13 @@ BOOL SetOutputParam(CXmlElement *Element, OUTPUT_PARAM &OutputParam)
 
 	// set default value
 	OutputParam.filename[0] = 0;
-	OutputParam.GpsMaskOut = OutputParam.GlonassMaskOut = 0;
+	OutputParam.GpsMaskOut = OutputParam.GlonassMaskOut = OutputParam.QzssMaskOut = 0;
 	OutputParam.BdsMaskOut = OutputParam.GalileoMaskOut = 0LL;
 	OutputParam.ElevationMask = DEG2RAD(5);
 	OutputParam.Interval = 1000;
 	// default output GPS L1 only
 	OutputParam.FreqSelect[0] = 0x1;
-	OutputParam.FreqSelect[1] = OutputParam.FreqSelect[2] = OutputParam.FreqSelect[3] = 0;
+	OutputParam.FreqSelect[1] = OutputParam.FreqSelect[2] = OutputParam.FreqSelect[3] = OutputParam.FreqSelect[4] = 0;
 
 	for (i = 0; i < Attributes->DictItemNumber; i ++)
 	{
@@ -346,6 +346,8 @@ BOOL ProcessConfigParam(CXmlElement *Element, OUTPUT_PARAM &OutputParam)
 					system = GalileoSystem;
 				else if (strcmp(Attributes->Dictionary[index].value, "GLONASS") == 0)
 					system = GlonassSystem;
+				else if (strcmp(Attributes->Dictionary[index].value, "QZSS") == 0)
+					system = QzssSystem;
 			}
 			svid = atoi(SubElement->GetText());
 			switch (system)
@@ -365,6 +367,12 @@ BOOL ProcessConfigParam(CXmlElement *Element, OUTPUT_PARAM &OutputParam)
 			case GlonassSystem:
 				if (svid >= 1 && svid <= 24)
 					OutputParam.GlonassMaskOut |= (1 << (svid-1));
+				break;
+			case QzssSystem:
+				if (svid >= 193 && svid <= 202)
+					OutputParam.QzssMaskOut |= (1 << (svid - 193));
+				else if (svid >= 1 && svid <= 10)
+					OutputParam.QzssMaskOut |= (1 << (svid - 1));
 				break;
 			default:
 				break;

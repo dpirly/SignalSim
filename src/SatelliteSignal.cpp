@@ -127,6 +127,20 @@ BOOL CSatelliteSignal::SetSignalAttribute(GnssSystem System, int SignalIndex, Na
 			return NavData ? ((typeid(*NavData) == typeid(GNavBit)) ? TRUE : FALSE) : TRUE;
 		default: return FALSE;	// unknown FreqIndex
 		}
+	case QzssSystem:
+		switch (SatSignal)
+		{
+		case SIGNAL_INDEX_L1CA:
+			Attribute = &SignalAttributes[0];
+			return NavData ? ((typeid(*NavData) == typeid(LNavBit)) ? TRUE : FALSE) : TRUE;
+		case SIGNAL_INDEX_L1C:
+			Attribute = &SignalAttributes[1];
+			return NavData ? ((typeid(*NavData) == typeid(CNav2Bit)) ? TRUE : FALSE) : TRUE;
+		case SIGNAL_INDEX_L5:
+			Attribute = &SignalAttributes[3];
+			return NavData ? ((typeid(*NavData) == typeid(CNavBit)) ? TRUE : FALSE) : TRUE;
+		default: return FALSE;
+		}
 	default: return FALSE;	// unknown system
 	}
 }
@@ -147,7 +161,7 @@ BOOL CSatelliteSignal::GetSatelliteSignal(GNSS_TIME TransmitTime, complex_number
 	const unsigned int *SecondaryCode = GetPilotBits(SatSystem, SatSignal, Svid, SecondaryLength);
 	int Seconds, LeapSecond;
 	int GalileoE1Signal = (SatSystem == GalileoSystem && SatSignal == SIGNAL_INDEX_E1) ? 1 : 0;
-	int Param = ((SatSystem == GpsSystem && SatSignal == SIGNAL_INDEX_L5) ? 1 : 0) || GalileoE1Signal;	// set to 1 for E1 or L5
+	int Param = (((SatSystem == GpsSystem || SatSystem == QzssSystem) && SatSignal == SIGNAL_INDEX_L5) ? 1 : 0) || GalileoE1Signal;	// set to 1 for E1 or L5
 
 	if (Svid < 0)	// attribute not yet set
 		return FALSE;
@@ -260,6 +274,23 @@ BOOL CSatelliteSignal::GetSatelliteSignal(GNSS_TIME TransmitTime, complex_number
 		case SIGNAL_INDEX_G2 :
 			DataSignal = complex_number((double)DataBit, 0);
 			PilotSignal = complex_number(0, 0);
+			break;
+		}
+		break;
+	case QzssSystem:
+		switch (SatSignal)
+		{
+		case SIGNAL_INDEX_L1CA:
+			DataSignal = complex_number((double)DataBit, 0);
+			PilotSignal = complex_number(0, 0);
+			break;
+		case SIGNAL_INDEX_L1C:
+			DataSignal = complex_number(DataBit * AMPLITUDE_1_4, 0);
+			PilotSignal = complex_number(PilotBit * AMPLITUDE_29_44, 0);
+			break;
+		case SIGNAL_INDEX_L5:
+			DataSignal = complex_number(0, DataBit * AMPLITUDE_1_2);
+			PilotSignal = complex_number(PilotBit * AMPLITUDE_1_2, 0);
 			break;
 		}
 		break;

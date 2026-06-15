@@ -110,6 +110,7 @@ enum NavDataType {
 	NavDataGpsUtc, NavDataBdsUtc, NavDataGalileoUtc, NavDataGalileoGps, NavDataLeapSecond,
 	NavDataGlonassFreq,
 	NavDataGpsLnav, NavDataGpsCnav, NavDataGpsCnav2,
+	NavDataQzssLnav, NavDataQzssCnav, NavDataQzssCnav2,
 	NavDataBdsD1D2, NavDataBdsCnav1, NavDataBdsCnav2, NavDataBdsCnav3,
 	NavDataGalileoINav, NavDataGalileoFNav,
 	NavDataNavICLnav,

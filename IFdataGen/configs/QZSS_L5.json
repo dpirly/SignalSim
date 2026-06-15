@@ -1,64 +1,53 @@
 {
 	"version": 1.0,
-	"description": "test file for IF data generation",
+	"description": "QZSS L5 IF data generation example",
 	"time": {
 		"type": "UTC",
-		"year": 2021,
-		"month": 6,
-		"day": 19,
+		"year": 2025,
+		"month": 12,
+		"day": 31,
 		"hour": 10,
 		"minute": 5,
 		"second": 30
 	},
 	"trajectory": {
-		"name": "test scenario",
+		"name": "qzss l5 static scenario",
 		"initPosition": {
 			"type": "LLA",
 			"format": "d",
-			"longitude": -121.915773,
-			"latitude": 37.352721,
-			"altitude": 20
+			"longitude": 139.7414,
+			"latitude": 35.6586,
+			"altitude": 50
 		},
 		"initVelocity": {
 			"type": "SCU",
-			"speed": 5,
-			"course": 318.91
+			"speed": 0,
+			"course": 0
 		},
 		"trajectoryList": [
 			{
 				"type": "Const",
-				"time": 0.2
+				"time": 150
 			}
-			
 		]
 	},
 	"ephemeris": {
 		"type": "RINEX",
-		"name": "..\/EphData\/BRDC00IGS_R_20211700000_01D_MN.rnx"
+		"name": "../EphData/BRDC00IGS_R_20253650000_01D_MN.rnx"
 	},
 	"output": {
 		"type": "IFdata",
 		"format": "IQ8",
 		"sampleFreq": 24,
 		"centerFreq": 1176.45,
-		"name": "GPS_BDS_GAL_L5_B2a_E5a.bin",
+		"name": "QZSS_L5.bin",
 		"config": {
 			"elevationMask": 3
-		},	
+		},
 		"systemSelect": [
 			{
-				"system": "GPS",
+				"system": "QZSS",
 				"signal": "L5",
-				"enable": true
-			},			
-			{
-				"system": "BDS",
-				"signal": "B2a",
-				"enable": true
-			},
-			{
-				"system": "Galileo",
-				"signal": "E5a",
 				"enable": true
 			}
 		]

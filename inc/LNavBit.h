@@ -33,6 +33,7 @@ private:
 	int FillGpsAlmanacPage(PGPS_ALMANAC Almanac, unsigned int Stream[8]);
 	int FillGpsHealthPage(GPS_ALMANAC Almanac[], unsigned int Stream4[8], unsigned int Stream5[8]);
 	unsigned int GpsGetParity(unsigned int word);
+	int MapSvidToIndex(int svid);
 };
 
 #endif // __LNAV_BIT_H__

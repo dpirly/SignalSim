@@ -40,8 +40,8 @@ static const char *KeyDictionaryListPower[] = {
 	"noiseFloor", "initPower", "elevationAdjust", "signalPower", "unit", "value", "system", "svid", "powerValue", "epoch", "time",
 };
 static const char *DictionaryListSystem[] = {
-//    0      1      2        3          4
-	"UTC", "GPS", "BDS", "Galileo", "GLONASS",
+//    0      1      2        3          4          5
+	"UTC", "GPS", "BDS", "Galileo", "GLONASS", "QZSS",
 };
 static const char *DictionaryListCoordinate[] = {
 //    0      1       2      3     4     5     6      7        8       9      10     11      12
@@ -69,6 +69,7 @@ static const char *DictionaryListSignal[] = {
 	"B1C", "B1I", "B2I", "B3I", "B2a", "B2b", "", "",
 	"E1",  "E5a", "E5b", "E5",  "E6",  "",    "", "",
 	"G1",  "G2",  "G3",  "",    "",    "",    "", "",
+	"L1CA","L1C", "L2C", "L2P", "L5",  "",    "", "",
 };
 static const char *DictionaryListPowerUnit[] = {
 //     0      1      2
@@ -263,13 +264,13 @@ BOOL SetOutputParam(JsonObject *Object, OUTPUT_PARAM &OutputParam)
 
 	// set default value
 	OutputParam.filename[0] = 0;
-	OutputParam.GpsMaskOut = OutputParam.GlonassMaskOut = 0;
+	OutputParam.GpsMaskOut = OutputParam.GlonassMaskOut = OutputParam.QzssMaskOut = 0;
 	OutputParam.BdsMaskOut = OutputParam.GalileoMaskOut = 0LL;
 	OutputParam.ElevationMask = DEG2RAD(5);
 	OutputParam.Interval = 1000;
 	// default output GPS L1 only
 	OutputParam.FreqSelect[0] = 0x1;
-	OutputParam.FreqSelect[1] = OutputParam.FreqSelect[2] = OutputParam.FreqSelect[3] = 0;
+	OutputParam.FreqSelect[1] = OutputParam.FreqSelect[2] = OutputParam.FreqSelect[3] = OutputParam.FreqSelect[4] = 0;
 
 	for (; Object; Object = Object->GetNextObject())
 	{
@@ -554,6 +555,12 @@ BOOL MaskOutSatellite(int system, int svid, OUTPUT_PARAM &OutputParam)
 		if (svid >= 1 && svid <= 24)
 			OutputParam.GlonassMaskOut |= (1 << (svid-1));
 		break;
+	case QzssSystem:
+		if (svid >= 193 && svid <= 202)
+			OutputParam.QzssMaskOut |= (1 << (svid - 193));
+		else if (svid >= 1 && svid <= 10)
+			OutputParam.QzssMaskOut |= (1 << (svid - 1));
+		break;
 	default:
 		return FALSE;
 	}
@@ -578,6 +585,8 @@ BOOL ProcessSystemSelect(JsonObject *Object, OUTPUT_PARAM &OutputParam)
 				signal = SearchDictionary(Object->String, PARAMETER(DictionaryListSignal));
 			break;
 		case 11:	// "enable"
+			if (signal >= 0 && system == QzssSystem && (signal / 8) == GpsSystem)
+				signal = QzssSystem * 8 + (signal % 8);
 			if (signal >= 0 && ((signal / 8) != system))	// freq and system do not match
 				system = -1;
 			if (system >= 0)
@@ -586,6 +595,8 @@ BOOL ProcessSystemSelect(JsonObject *Object, OUTPUT_PARAM &OutputParam)
 					signal = 0;
 				else
 					signal %= 8;
+				if (system == QzssSystem && signal != SIGNAL_INDEX_L1CA && signal != SIGNAL_INDEX_L1C && signal != SIGNAL_INDEX_L5)
+					break;
 				if (Object->Type == JsonObject::ValueTypeTrue)
 					OutputParam.FreqSelect[system] |= (1 << signal);
 				else if (Object->Type == JsonObject::ValueTypeFalse)

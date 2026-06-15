@@ -215,6 +215,7 @@ GPS_EPHEMERIS NavBit::AlignToe300s(PGPS_EPHEMERIS Eph)
 	}
 	NewEph.toe = NewEph.toc = NewEph.top = NewToe;
 
+	NewEph.af0 += (NewEph.af1 + NewEph.af2 * TimeDiff) * TimeDiff;
 	NewEph.axis += NewEph.axis_dot * TimeDiff;
 	NewEph.sqrtA = sqrt(NewEph.axis);
 	NewEph.delta_n += NewEph.delta_n_dot * TimeDiff;

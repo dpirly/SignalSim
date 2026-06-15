@@ -33,6 +33,27 @@ const unsigned int PrnGenerate::L2CLPrnInit[32] = {
 0x046b92b, 0x7a7c2ae, 0x45886a6, 0x5a9a643, 0x68872f2, 0x3e759f6, 0x6b6fdbd, 0x31b717b,
 0x048fcb0, 0x1cbc9e3, 0x6b38d5b, 0x6f5b8fa, 0x121a76e, 0x5f23c35, 0x326fd21, 0x3cb4e3c, };
 
+const unsigned int PrnGenerate::QzssL1CAPrnInit[10] = {
+01050, 01607, 01747, 01305, 00540, 01363, 00727, 00147, 01206, 01045, };
+
+const unsigned int PrnGenerate::QzssL5IPrnInit[10] = {
+0x0c2e, 0x0c9f, 0x11cc, 0x0f71, 0x07e1, 0x0071, 0x15a4, 0x0876, 0x0fa3, 0x03cb, };
+
+const unsigned int PrnGenerate::QzssL5QPrnInit[10] = {
+0x1387, 0x0d3a, 0x0c66, 0x010c, 0x0a2d, 0x1057, 0x0671, 0x08e6, 0x0965, 0x1c57, };
+
+const int PrnGenerate::QzssL1CDataInsertIndex[10] = {
+ 9753, 4799,10126,  241, 1245, 1274, 1456, 9967,  235,  512, };
+
+const int PrnGenerate::QzssL1CDataPhaseDiff[10] = {
+ 4834, 4456, 4056, 3804, 3672, 4205, 3348, 4152, 3883, 3473, };
+
+const int PrnGenerate::QzssL1CPilotInsertIndex[10] = {
+ 9864, 9753, 9859,  328,    1, 4733,  164,  135,  174,  132, };
+
+const int PrnGenerate::QzssL1CPilotPhaseDiff[10] = {
+ 4311, 5024, 4352, 4678, 5034, 5085, 3646, 4868, 3668, 4211, };
+
 const unsigned int PrnGenerate::B1IPrnInit[63] = {
 0x187, 0x639, 0x1e6, 0x609, 0x605, 0x1f8, 0x606, 0x1f9, 0x704, 0x7be, 0x061, 0x78e, 0x782, 0x07f, 0x781, 0x07e,
 0x7df, 0x030, 0x03c, 0x7c1, 0x03f, 0x7c0, 0x7ef, 0x7e3, 0x01e, 0x7e0, 0x01f, 0x00c, 0x7f1, 0x00f, 0x7f0, 0x7fd,
@@ -318,6 +339,35 @@ PrnGenerate::PrnGenerate(GnssSystem System, int SignalIndex, int Svid)
 			Attribute = NULL;
 		}
 		break;
+	case QzssSystem:
+		if (Svid < 193 || Svid > 202)
+		{
+			DataPrn = NULL; PilotPrn = NULL;
+			Attribute = NULL;
+			break;
+		}
+		switch (SignalIndex)
+		{
+		case SIGNAL_INDEX_L1CA:
+			DataPrn = GetQzssL1CA(Svid);
+			PilotPrn = NULL;
+			Attribute = &PrnAttributes[0];
+			break;
+		case SIGNAL_INDEX_L1C:
+			DataPrn = GetL1CWeil(QzssL1CDataInsertIndex[Svid - 193], QzssL1CDataPhaseDiff[Svid - 193]);
+			PilotPrn = GetL1CWeil(QzssL1CPilotInsertIndex[Svid - 193], QzssL1CPilotPhaseDiff[Svid - 193]);
+			Attribute = &PrnAttributes[1];
+			break;
+		case SIGNAL_INDEX_L5:
+			DataPrn = GetQzssL5(Svid, false);
+			PilotPrn = GetQzssL5(Svid, true);
+			Attribute = &PrnAttributes[4];
+			break;
+		default:
+			DataPrn = NULL; PilotPrn = NULL;
+			Attribute = NULL;
+		}
+		break;
 	default:	// unknown system
 		DataPrn = NULL; PilotPrn = NULL;
 		Attribute = NULL;
@@ -343,6 +393,49 @@ int *PrnGenerate::GetGoldCode(unsigned int G1Init, unsigned int G1Poly, unsigned
 		if (i == ResetPos) G2.Initial();
 		PrnSequence[i] = G1.GetOutput() ^ G2.GetOutput();
 	}
+	return PrnSequence;
+}
+
+int *PrnGenerate::GetQzssL1CA(int Prn)
+{
+	int *PrnSequence = new int[1023];
+	unsigned int G1 = 0x3ff;
+	unsigned int G2 = QzssL1CAPrnInit[Prn - 193];
+
+	for (int i = 0; i < 1023; i ++)
+	{
+		int PrnBit = ((G1 >> 9) ^ (G2 >> 9)) & 1;
+		PrnSequence[i] = PrnBit ? 0 : 1;
+
+		unsigned int G1Feedback = ((G1 >> 2) ^ (G1 >> 9)) & 1;
+		unsigned int G2Feedback = ((G2 >> 1) ^ (G2 >> 2) ^ (G2 >> 5) ^ (G2 >> 7) ^ (G2 >> 8) ^ (G2 >> 9)) & 1;
+		G1 = ((G1 << 1) & 0x3fe) | G1Feedback;
+		G2 = ((G2 << 1) & 0x3fe) | G2Feedback;
+	}
+
+	return PrnSequence;
+}
+
+int *PrnGenerate::GetQzssL5(int Prn, bool Pilot)
+{
+	int *PrnSequence = new int[10230];
+	unsigned int Xa = 0x1fff;
+	unsigned int Xb = Pilot ? QzssL5QPrnInit[Prn - 193] : QzssL5IPrnInit[Prn - 193];
+
+	for (int i = 0; i < 10230; i ++)
+	{
+		int XaOut = Xa & 1;
+		int XbOut = Xb & 1;
+		int PrnBit = XaOut ^ XbOut;
+		PrnSequence[i] = PrnBit ? 0 : 1;
+
+		unsigned int XaFeedback = ((Xa >> 4) ^ (Xa >> 3) ^ (Xa >> 1) ^ Xa) & 1;
+		unsigned int XbFeedback = ((Xb >> 12) ^ (Xb >> 10) ^ (Xb >> 9) ^ (Xb >> 7) ^
+			(Xb >> 6) ^ (Xb >> 5) ^ (Xb >> 1) ^ Xb) & 1;
+		Xa = (Xa == 0x1ffd) ? 0x1fff : ((Xa >> 1) | (XaFeedback << 12));
+		Xb = (Xb >> 1) | (XbFeedback << 12);
+	}
+
 	return PrnSequence;
 }
 

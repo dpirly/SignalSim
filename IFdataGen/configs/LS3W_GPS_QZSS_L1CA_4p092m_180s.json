@@ -1,0 +1,74 @@
+{
+  "version": 1.0,
+  "description": "LS3W output: GPS L1 C/A + QZSS L1 C/A at 4.092 Msps",
+  "time": {
+    "type": "UTC",
+    "year": 2025,
+    "month": 1,
+    "day": 1,
+    "hour": 10,
+    "minute": 5,
+    "second": 30
+  },
+  "trajectory": {
+    "name": "static gps qzss l1ca ls3w",
+    "initPosition": {
+      "type": "LLA",
+      "format": "d",
+      "longitude": 139.7414,
+      "latitude": 35.6586,
+      "altitude": 50
+    },
+    "initVelocity": {
+      "type": "SCU",
+      "speed": 0,
+      "course": 0
+    },
+    "trajectoryList": [
+      {
+        "type": "Const",
+        "time": 180.0
+      }
+    ]
+  },
+  "ephemeris": {
+    "type": "RINEX",
+    "name": "../EphData/BRDC00IGS_R_20250010000_01D_MN.rnx"
+  },
+  "output": {
+    "type": "IFdata",
+    "format": "LS3W",
+    "sampleFreq": 4.092,
+    "name": "GPS_QZSS_L1CA_4p092m_180s_3bit.LS3W",
+    "quantBits": 3,
+    "ls3wPaths": [
+      {
+        "centerFreq": 1575.42,
+        "bandwidth": 4.092,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L1CA",
+            "enable": true
+          },
+          {
+            "system": "QZSS",
+            "signal": "L1CA",
+            "enable": true
+          }
+        ]
+      }
+    ],
+    "config": {
+      "elevationMask": 3
+    }
+  },
+  "power": {
+    "noiseFloor": -172,
+    "initPower": {
+      "unit": "dBHz",
+      "value": 53
+    },
+    "elevationAdjust": false
+  }
+}

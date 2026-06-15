@@ -126,8 +126,10 @@ NavDataType LoadNavFileContents(FILE *fp_nav, void *NavData)
 			switch (str[6])	// system source
 			{
 			case 'G':	// GPS, "LNAV", "CNAV", "CNV2"
-			case 'J':	// QZSS, "LNAV", "CNAV", "CNV2"
 				DataType = (str[10] == 'L') ? NavDataGpsLnav : (str[13] == 'V') ? NavDataGpsCnav : NavDataGpsCnav2;
+				break;
+			case 'J':	// QZSS, "LNAV", "CNAV", "CNV2"
+				DataType = (str[10] == 'L') ? NavDataQzssLnav : (str[13] == 'V') ? NavDataQzssCnav : NavDataQzssCnav2;
 				break;
 			case 'C':	// BDS, "D1", "D2", "CNV1", "CNV2", "CNV3"
 				DataType = (str[10] == 'D') ? NavDataBdsD1D2 : (str[13] == '1') ? NavDataBdsCnav1 : (str[13] == '2') ? NavDataBdsCnav2 : NavDataBdsCnav3;
@@ -167,9 +169,9 @@ NavDataType LoadNavFileContents(FILE *fp_nav, void *NavData)
 			DataType = NavDataUnknown;
 		}
 	}
-	else if (str[0] == 'G' || str[0] == 'C' || str[0] == 'E')
+	else if (str[0] == 'G' || str[0] == 'C' || str[0] == 'E' || str[0] == 'J')
 	{
-		DataType = (str[0] == 'G') ? NavDataGpsLnav : (str[0] == 'C') ? NavDataBdsD1D2 : NavDataGalileoINav;
+		DataType = (str[0] == 'G') ? NavDataGpsLnav : (str[0] == 'C') ? NavDataBdsD1D2 : (str[0] == 'E') ? NavDataGalileoINav : NavDataQzssLnav;
 		DecodeEphParam(DataType, str, fp_nav, (PGPS_EPHEMERIS)NavData);
 	}
 	else if (str[0] == 'R')	// GLONASS
@@ -384,15 +386,18 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 	switch (DataType)
 	{
 		case NavDataGpsLnav:
+		case NavDataQzssLnav:
 		case NavDataBdsD1D2:
 		case NavDataGalileoINav:
 		case NavDataGalileoFNav:
 		case NavDataNavICLnav:
 			LineCount --;
 		case NavDataGpsCnav:
+		case NavDataQzssCnav:
 		case NavDataBdsCnav3:
 			LineCount --;
 		case NavDataGpsCnav2:
+		case NavDataQzssCnav2:
 		case NavDataBdsCnav1:
 		case NavDataBdsCnav2:
 		    Eph->valid = 1;      // Ephemeris valid
@@ -411,6 +416,8 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 	}
 
 	// common variables
+	if ((DataType == NavDataQzssLnav || DataType == NavDataQzssCnav || DataType == NavDataQzssCnav2) && svid < 193)
+		svid += 192;
 	Eph->svid = svid;
 	Eph->toc = toc_time.MilliSeconds / 1000;
 	Eph->af0 = data[0];
@@ -437,6 +444,7 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 	switch (DataType)
 	{
 		case NavDataGpsLnav:
+		case NavDataQzssLnav:
 			Eph->axis_dot = 0.0;
 			Eph->delta_n_dot = 0.0;
 			Eph->iodc = (unsigned short)data[26];      /* IODC */
@@ -453,6 +461,7 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 			Eph->source = EPH_SOURCE_LNAV;
 			break;
 		case NavDataGpsCnav:
+		case NavDataQzssCnav:
 			Eph->toe = Eph->toc;	/* toe must be same as toc */
 			Eph->axis_dot = data[3];
 			Eph->delta_n_dot = data[20];
@@ -471,6 +480,7 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 			Eph->source = EPH_SOURCE_CNAV;
 			break;
 		case NavDataGpsCnav2:
+		case NavDataQzssCnav2:
 			Eph->toe = Eph->toc;	/* toe must be same as toc */
 			Eph->axis_dot = data[3];
 			Eph->delta_n_dot = data[20];

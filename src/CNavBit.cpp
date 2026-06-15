@@ -12,6 +12,7 @@
 
 #define INVALID_TOA 255	// valid range of toa is 0~147
 #define A_REF 26559710.0
+#define QZSS_A_REF 42164200.0
 #define OMEGA_DOT_REF (-2.6e-9)
 #define NORMINAL_I0 0.94247779607693797153879301498385
 
@@ -46,11 +47,12 @@ CNavBit::~CNavBit()
 int CNavBit::GetFrameData(GNSS_TIME StartTime, int svid, int Param, int *NavBits)
 {
 	int i, j, TOW, message, BitCount;
+	int index = MapSvidToIndex(svid);
 	unsigned int EncodeData[9], CrcResult, EncodeWord;	// 276bit to be encoded by CRC
 	unsigned char EncodeMessage[75], ConvEncodeBits;	// EncodeMessage contains 8x75 bits
 
 	// validate svid to prevent out-of-bounds array access
-	if (svid < 1 || svid > 32)
+	if (index < 0)
 	{
 		// fill NavBits with zeros for invalid svid
 		memset(NavBits, 0, sizeof(int) * 600);
@@ -72,7 +74,7 @@ int CNavBit::GetFrameData(GNSS_TIME StartTime, int svid, int Param, int *NavBits
 	CrcResult = Crc24qEncode(EncodeData, 276);
 
 	// do convolution encode (EncodeData[0] bit22 through EncodeData[6] bit0)
-	ConvEncodeBits = Param ? ConvEncodeBitsL5[svid-1] : ConvEncodeBitsL2[svid-1];
+	ConvEncodeBits = Param ? ConvEncodeBitsL5[index] : ConvEncodeBitsL2[index];
 	EncodeWord = EncodeData[0] << 12;	// move to MSB
 	for (i = 0, BitCount = 12; i < 276 / 2; i ++)
 	{
@@ -85,9 +87,9 @@ int CNavBit::GetFrameData(GNSS_TIME StartTime, int svid, int Param, int *NavBits
 	for (; i < 300 / 2; i ++)	// encode CRC
 		EncodeMessage[i/2] = (EncodeMessage[i/2] << 4) + ConvolutionEncodePair(ConvEncodeBits, EncodeWord);
 	if (Param)
-		ConvEncodeBitsL5[svid-1] = ConvEncodeBits;
+		ConvEncodeBitsL5[index] = ConvEncodeBits;
 	else
-		ConvEncodeBitsL2[svid-1] = ConvEncodeBits;
+		ConvEncodeBitsL2[index] = ConvEncodeBits;
 
 	// put into NavBits
 	for (i = 0; i < 75; i ++)
@@ -100,15 +102,23 @@ int CNavBit::GetFrameData(GNSS_TIME StartTime, int svid, int Param, int *NavBits
 int CNavBit::SetEphemeris(int svid, PGPS_EPHEMERIS Eph)
 {
 	GPS_EPHEMERIS NewEph;
+	int index = MapSvidToIndex(svid);
+	bool IsQzss = (svid >= 193 && svid <= 202);
 
-	if (svid < 1 || svid > 32 || !Eph || !Eph->valid)
+	if (index < 0 || !Eph || !Eph->valid)
 		return 0;
 	if ((Eph->toe % 300) != 0)
 	{
 		NewEph = AlignToe300s(Eph);
 		Eph = &NewEph;
 	}
-	ComposeEphWords(Eph, EphMessage[svid-1], ClockMessage[svid-1], DelayMessage[svid-1]);
+	NewEph = *Eph;
+	if (IsQzss)
+	{
+		NewEph.svid = (unsigned char)(svid - 192);
+		Eph = &NewEph;
+	}
+	ComposeEphWords(Eph, EphMessage[index], ClockMessage[index], DelayMessage[index], IsQzss);
 	return svid;
 }
 
@@ -170,12 +180,13 @@ int CNavBit::SetIonoUtc(PIONO_PARAM IonoParam, PUTC_PARAM UtcParam)
 	return 0;
 }
 
-int CNavBit::ComposeEphWords(PGPS_EPHEMERIS Ephemeris, unsigned int EphData[2][9], unsigned int ClockData[4], unsigned int DelayData[3])
+int CNavBit::ComposeEphWords(PGPS_EPHEMERIS Ephemeris, unsigned int EphData[2][9], unsigned int ClockData[4], unsigned int DelayData[3], bool IsQzss)
 {
 	signed int IntValue;
 	unsigned int UintValue;
 	long long int LongValue;
 	unsigned long long int ULongValue;
+	double RefAxis = IsQzss ? QZSS_A_REF : A_REF;
 
 	// Message Type 10
 	EphData[0][0] = (0x8b << 12) | (Ephemeris->svid << 6) | 10;
@@ -187,7 +198,7 @@ int CNavBit::ComposeEphWords(PGPS_EPHEMERIS Ephemeris, unsigned int EphData[2][9
 	EphData[0][2] |= COMPOSE_BITS(Ephemeris->ura, 14, 5);
 	UintValue = Ephemeris->toe / 300;
 	EphData[0][2] |= COMPOSE_BITS(UintValue, 3, 11);
-	IntValue = UnscaleInt(Ephemeris->axis - A_REF, -9);
+	IntValue = UnscaleInt(Ephemeris->axis - RefAxis, -9);
 	EphData[0][2] |= COMPOSE_BITS(IntValue >> 23, 0, 3);
 	EphData[0][3] = COMPOSE_BITS(IntValue, 9, 23);
 	IntValue = UnscaleUint(Ephemeris->axis_dot, -21);
@@ -332,9 +343,11 @@ void CNavBit::GetMessageData(int svid, int message, int TOW, unsigned int Data[9
 {
 	int message_order[6] = {30, 33, 31, 37, 31, 37}, message_id;
 	int frame = message / 4, alm_index;
+	int index = MapSvidToIndex(svid);
+	int message_svid = (svid >= 193 && svid <= 202) ? (svid - 192) : svid;
 
 	// validate svid to prevent out-of-bounds array access
-	if (svid < 1 || svid > 32)
+	if (index < 0)
 	{
 		// initialize Data with zeros for invalid svid
 		memset(Data, 0, sizeof(unsigned int) * 9);
@@ -350,18 +363,18 @@ void CNavBit::GetMessageData(int svid, int message, int TOW, unsigned int Data[9
 	switch (message)
 	{
 	case 0:	// message 10
-		memcpy(Data, EphMessage[svid-1][0], sizeof(unsigned int) * 9);
+		memcpy(Data, EphMessage[index][0], sizeof(unsigned int) * 9);
 		break;
 	case 1:	// message 11
-		memcpy(Data, EphMessage[svid-1][1], sizeof(unsigned int) * 9);
+		memcpy(Data, EphMessage[index][1], sizeof(unsigned int) * 9);
 		break;
 	case 2:	// message index 2
 		message_id = message_order[frame%6];
-		Data[1] = ClockMessage[svid-1][0]; Data[2] = ClockMessage[svid-1][1]; Data[3] = ClockMessage[svid-1][2]; Data[4] = ClockMessage[svid-1][3];	// copy clock fields
+		Data[1] = ClockMessage[index][0]; Data[2] = ClockMessage[index][1]; Data[3] = ClockMessage[index][2]; Data[4] = ClockMessage[index][3];	// copy clock fields
 		switch (message_id)
 		{
 		case 30:
-			Data[4] |= DelayMessage[svid-1][0]; Data[5] = DelayMessage[svid-1][1]; Data[6] = DelayMessage[svid-1][2];	// copy group delay fields
+			Data[4] |= DelayMessage[index][0]; Data[5] = DelayMessage[index][1]; Data[6] = DelayMessage[index][2];	// copy group delay fields
 			Data[6] |= IonoMessage[0]; Data[7] = IonoMessage[1]; Data[8] = IonoMessage[2];	// copy ionosphere delay fields
 			break;
 		case 31:
@@ -371,6 +384,7 @@ void CNavBit::GetMessageData(int svid, int message, int TOW, unsigned int Data[9
 			Data[6] = (ReducedAlm[alm_index+1] << 2) + (ReducedAlm[alm_index+2] >> 29);
 			Data[7] = (ReducedAlm[alm_index+2] << 3) + (ReducedAlm[alm_index+3] >> 28);
 			Data[8] = (ReducedAlm[alm_index+3] << 4);
+			break;
 		case 33:
 			Data[4] |= UTCMessage[0]; Data[5] = UTCMessage[1]; Data[6] = UTCMessage[2]; Data[7] = UTCMessage[2];	// copy UTC fields
 			Data[8] = 0;
@@ -380,11 +394,11 @@ void CNavBit::GetMessageData(int svid, int message, int TOW, unsigned int Data[9
 			Data[4] |= TOA; Data[5] = MidiAlm[alm_index][0]; Data[6] = MidiAlm[alm_index][1]; Data[7] = MidiAlm[alm_index][2]; Data[8] = MidiAlm[alm_index][3]; // copy almanac
 			break;
 		}
-		Data[0] = (0x8b << 12) | (svid << 6) | message_id;
+		Data[0] = (0x8b << 12) | (message_svid << 6) | message_id;
 		break;
 	case 3:	// message 37
-		Data[0] = (0x8b << 12) | (svid << 6) | 37;
-		Data[1] = ClockMessage[svid-1][0]; Data[2] = ClockMessage[svid-1][1]; Data[3] = ClockMessage[svid-1][2]; Data[4] = ClockMessage[svid-1][3];	// copy clock fields
+		Data[0] = (0x8b << 12) | (message_svid << 6) | 37;
+		Data[1] = ClockMessage[index][0]; Data[2] = ClockMessage[index][1]; Data[3] = ClockMessage[index][2]; Data[4] = ClockMessage[index][3];	// copy clock fields
 		Data[4] |= TOA; Data[5] = MidiAlm[frame][0]; Data[6] = MidiAlm[frame][1]; Data[7] = MidiAlm[frame][2]; Data[8] = MidiAlm[frame][3]; // copy almanac
 		break;
 	}
@@ -398,4 +412,13 @@ unsigned char CNavBit::ConvolutionEncodePair(unsigned char &ConvEncodeBits, unsi
 	ConvEncodeBits = (ConvEncodeBits << 2) + (unsigned char)(EncodeWord >> 30);
 	EncodeWord <<= 2;
 	return (ConvolutionEncode(ConvEncodeBits) & 0xf);
+}
+
+int CNavBit::MapSvidToIndex(int svid)
+{
+	if (svid >= 1 && svid <= 32)
+		return svid - 1;
+	if (svid >= 193 && svid <= 202)
+		return 32 + svid - 193;
+	return -1;
 }

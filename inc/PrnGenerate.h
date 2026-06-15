@@ -51,12 +51,21 @@ private:
 	int *GetL1CWeil(int InsertPoint, int PhaseDiff);
 	int *GetB1CWeil(int TruncationPoint, int PhaseDiff);
 	int *GetMemorySequence(const unsigned int *BinarySequence, int SectorLength);
+	int *GetQzssL1CA(int Prn);
+	int *GetQzssL5(int Prn, bool Pilot);
 
 	static const unsigned int L1CAPrnInit[32];
 	static const unsigned int L5IPrnInit[32];
 	static const unsigned int L5QPrnInit[32];
 	static const unsigned int L2CMPrnInit[32];
 	static const unsigned int L2CLPrnInit[32];
+	static const unsigned int QzssL1CAPrnInit[10];
+	static const unsigned int QzssL5IPrnInit[10];
+	static const unsigned int QzssL5QPrnInit[10];
+	static const int QzssL1CDataInsertIndex[10];
+	static const int QzssL1CDataPhaseDiff[10];
+	static const int QzssL1CPilotInsertIndex[10];
+	static const int QzssL1CPilotPhaseDiff[10];
 	static const unsigned int B1IPrnInit[63];
 	static const unsigned int B3IPrnInit[63];
 	static const unsigned int B2aDPrnInit[63];

@@ -937,12 +937,13 @@ CNav2Bit::~CNav2Bit()
 int CNav2Bit::GetFrameData(GNSS_TIME StartTime, int svid, int Param, int *NavBits)
 {
 	int i, j, page, toi, itow;
+	int SvidIndex = GetSvidIndex(svid);
 	unsigned int Stream[19];
 	int bits[1748], *p;
 	unsigned int *data, value;
 
 	// data channel
-	if (svid < 1 || svid > 32)
+	if (SvidIndex < 0)
 		return 1;
 	page = StartTime.MilliSeconds / 18000;		// frames from week epoch
 	itow = page / 400;
@@ -950,7 +951,7 @@ int CNav2Bit::GetFrameData(GNSS_TIME StartTime, int svid, int Param, int *NavBit
 	// assume subframe 3 broadcast first page
 	page = 0;
 
-	data = Subframe2[svid-1];
+	data = Subframe2[SvidIndex];
 	for (i = 0; i < 18; i ++)
 		Stream[i] = data[i];
 	// insert WN and ITOW for Subframe2
@@ -982,16 +983,26 @@ int CNav2Bit::GetFrameData(GNSS_TIME StartTime, int svid, int Param, int *NavBit
 int CNav2Bit::SetEphemeris(int svid, PGPS_EPHEMERIS Eph)
 {
 	GPS_EPHEMERIS NewEph;
+	int SvidIndex = GetSvidIndex(svid);
 
-	if (svid < 1 || svid > 32 || !Eph || !Eph->valid)
+	if (SvidIndex < 0 || !Eph || !Eph->valid)
 		return 0;
 	if ((Eph->toe % 300) != 0)
 	{
 		NewEph = AlignToe300s(Eph);
 		Eph = &NewEph;
 	}
-	ComposeSubframe2(Eph, Subframe2[svid-1], ISC[svid-1]);
+	ComposeSubframe2(Eph, Subframe2[SvidIndex], ISC[SvidIndex]);
 	return svid;
+}
+
+int CNav2Bit::GetSvidIndex(int svid)
+{
+	if (svid >= 1 && svid <= 32)
+		return svid - 1;
+	if (svid >= 193 && svid <= 202)
+		return 32 + svid - 193;
+	return -1;
 }
 
 // 576 bits subframe information divided int 18 DWORDs
@@ -1185,16 +1196,17 @@ int CNav2Bit::XorBits(unsigned int Data)
 void CNav2Bit::GetSubframe3Data(int Svid, int PageIndex, unsigned int Subframe3Data[9])
 {
 	int i;
+	int SvidIndex = GetSvidIndex(Svid);
 
 	memcpy(Subframe3Data, Subframe3[PageIndex], sizeof(unsigned int) * 8);
 	Subframe3Data[0] &= 0x3ffff;	// clear MSB and PRN field
 	Subframe3Data[0] |= (Svid << 18);	// put transmitting PRN
-	if (PageIndex == PAGE_INDEX_IONO_UTC)	// page1 append ISC
+	if (PageIndex == PAGE_INDEX_IONO_UTC && SvidIndex >= 0)	// page1 append ISC
 	{
-		Subframe3Data[5] |= COMPOSE_BITS(ISC[Svid-1][0] >> 16, 0, 10);
-		Subframe3Data[6] = COMPOSE_BITS(ISC[Svid-1][0], 16, 16);
-		Subframe3Data[6] |= COMPOSE_BITS(ISC[Svid-1][1] >> 10, 0, 16);
-		Subframe3Data[7] = COMPOSE_BITS(ISC[Svid-1][1], 22, 10);
+		Subframe3Data[5] |= COMPOSE_BITS(ISC[SvidIndex][0] >> 16, 0, 10);
+		Subframe3Data[6] = COMPOSE_BITS(ISC[SvidIndex][0], 16, 16);
+		Subframe3Data[6] |= COMPOSE_BITS(ISC[SvidIndex][1] >> 10, 0, 16);
+		Subframe3Data[7] = COMPOSE_BITS(ISC[SvidIndex][1], 22, 10);
 	}
 	Subframe3Data[8] = Crc24qEncode(Subframe3Data, 250) << 8;
 	// whole array shift left 6bit

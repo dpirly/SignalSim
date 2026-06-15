@@ -23,6 +23,7 @@ public:
 	static const int BdsSatNumber = 63;
 	static const int GalileoSatNumber = 36;
 	static const int GlonassSatNumber = 24;
+	static const int QzssSatNumber = 10;
 
 	CNavData();
 	~CNavData();
@@ -35,6 +36,7 @@ public:
 	PGPS_ALMANAC GetGpsAlmanac() { return GpsAlmanac; }
 	PGPS_ALMANAC GetBdsAlmanac() { return BdsAlmanac; }
 	PGPS_ALMANAC GetGalileoAlmanac() { return GalileoAlmanac; }
+	PGPS_ALMANAC GetQzssAlmanac() { return QzssAlmanac; }
 	PGLONASS_ALMANAC GetGlonassAlmanac() { return GlonassAlmanac; }
 	PIONO_PARAM GetGpsIono() { return &GpsIono; }
 	PIONO_PARAM GetBdsIono() { return &BdsIono[0]; }
@@ -53,18 +55,22 @@ private:
 	int BdsEphemerisNumber;
 	int GalileoEphemerisNumber;
 	int GlonassEphemerisNumber;
+	int QzssEphemerisNumber;
 	int GpsEphemerisPoolSize;
 	int BdsEphemerisPoolSize;
 	int GalileoEphemerisPoolSize;
 	int GlonassEphemerisPoolSize;
+	int QzssEphemerisPoolSize;
 	PGPS_EPHEMERIS GpsEphemerisPool;
 	PGPS_EPHEMERIS BdsEphemerisPool;
 	PGPS_EPHEMERIS GalileoEphemerisPool;
 	PGLONASS_EPHEMERIS GlonassEphemerisPool;
+	PGPS_EPHEMERIS QzssEphemerisPool;
 	GPS_ALMANAC GpsAlmanac[GpsSatNumber];
 	GPS_ALMANAC BdsAlmanac[BdsSatNumber];
 	GPS_ALMANAC GalileoAlmanac[GalileoSatNumber];
 	GLONASS_ALMANAC GlonassAlmanac[GlonassSatNumber];
+	GPS_ALMANAC QzssAlmanac[QzssSatNumber];
 	IONO_PARAM GpsIono;
 	IONO_PARAM BdsIono[24];
 	IONO_NEQUICK GalileoIono;

@@ -24,8 +24,8 @@ int GetVisibleSatellite(KINEMATIC_INFO Position, GNSS_TIME time, OUTPUT_PARAM Ou
 
 	for (i = 0; i < Number; i ++)
 	{
-		if (Eph[i] == NULL || Eph[i]->valid == 0 || Eph[i]->health != 0)
-			continue;
+			if (Eph[i] == NULL || Eph[i]->valid == 0 || (system != QzssSystem && Eph[i]->health != 0))
+				continue;
 		if (system == GpsSystem)
 		{
 			if (OutputParam.GpsMaskOut & (1 << i))
@@ -39,6 +39,12 @@ int GetVisibleSatellite(KINEMATIC_INFO Position, GNSS_TIME time, OUTPUT_PARAM Ou
 		else if (system == GalileoSystem)
 		{
 			if (OutputParam.GalileoMaskOut & (1LL << i))
+				continue;
+		}
+		else if (system == QzssSystem)
+		{
+			int QzssIndex = Eph[i]->svid - 193;
+			if (QzssIndex < 0 || QzssIndex >= 10 || (OutputParam.QzssMaskOut & (1UL << QzssIndex)))
 				continue;
 		}
 		else
@@ -157,6 +163,7 @@ void GetSatelliteParam(KINEMATIC_INFO PositionEcef, LLA_POSITION PositionLla, GN
 		switch (system)
 		{
 		case GpsSystem:
+		case QzssSystem:
 			SatelliteParam->GroupDelay[SIGNAL_INDEX_L1CA] = Eph->tgd;	// L1C/A
 			SatelliteParam->GroupDelay[SIGNAL_INDEX_L1C] = Eph->tgd_ext[1];	// L1C
 			SatelliteParam->GroupDelay[SIGNAL_INDEX_L2C] = Eph->tgd2;	// L2C
@@ -219,6 +226,7 @@ double GetIonoDelay(double IonoDelayL1, int system, int SignalIndex)
 	switch (system)
 	{
 	case GpsSystem:
+	case QzssSystem:
 		switch (SignalIndex)
 		{
 		case SIGNAL_INDEX_L1CA: return IonoDelayL1;
@@ -260,6 +268,7 @@ double GetWaveLength(int system, int SignalIndex, int FreqID)
 	switch (system)
 	{
 	case GpsSystem:
+	case QzssSystem:
 		switch (SignalIndex)
 		{
 		case SIGNAL_INDEX_L1CA:
@@ -516,6 +525,7 @@ void CSatelliteParam::CalculateParam(KINEMATIC_INFO PositionEcef, LLA_POSITION P
 		switch (system)
 		{
 		case GpsSystem:
+		case QzssSystem:
 			GroupDelay[SIGNAL_INDEX_L1CA] = EphCur->tgd;	// L1C/A
 			GroupDelay[SIGNAL_INDEX_L1C] = EphCur->tgd_ext[1];	// L1C
 			GroupDelay[SIGNAL_INDEX_L2C] = EphCur->tgd2;	// L2C
@@ -596,6 +606,7 @@ double CSatelliteParam::GetWaveLength(int SignalIndex)
 	switch (system)
 	{
 	case GpsSystem:
+	case QzssSystem:
 		switch (SignalIndex)
 		{
 		case SIGNAL_INDEX_L1CA:
@@ -638,6 +649,7 @@ double CSatelliteParam::GetIonoDelayFactor(int SignalIndex)
 	switch (system)
 	{
 	case GpsSystem:
+	case QzssSystem:
 		switch (SignalIndex)
 		{
 		case SIGNAL_INDEX_L1CA: return 1.0;
