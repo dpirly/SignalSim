@@ -1071,32 +1071,96 @@ static std::string MakeIniFileName(const char *OutputFileName)
 	return IniFileName;
 }
 
+static const char *Ls3wSystemIniName(int System)
+{
+	switch (System)
+	{
+	case GpsSystem: return "GPS";
+	case BdsSystem: return "BDS";
+	case GalileoSystem: return "Galileo";
+	case GlonassSystem: return "GLONASS";
+	case QzssSystem: return "QZSS";
+	default: return "";
+	}
+}
+
+static void AddUniqueSignal(std::vector<std::string> &Signals, const std::string &Signal)
+{
+	if (std::find(Signals.begin(), Signals.end(), Signal) == Signals.end())
+		Signals.push_back(Signal);
+}
+
+static std::string JoinSignals(const std::vector<std::string> &Signals, const char *Separator)
+{
+	std::string Text;
+	for (size_t i = 0; i < Signals.size(); ++i)
+	{
+		if (i > 0)
+			Text += Separator;
+		Text += Signals[i];
+	}
+	return Text;
+}
+
+static std::vector<std::string> CollectLs3wSignals(const Ls3wPathConfig &Path, int System, bool WithSystemPrefix)
+{
+	std::vector<std::string> Signals;
+	if (System < GpsSystem || System > QzssSystem)
+		return Signals;
+
+	for (int sig = 0; sig < 8; ++sig)
+	{
+		if (!(Path.FreqSelect[System] & (1U << sig)) || !SignalName[System][sig])
+			continue;
+		std::string Signal;
+		if (WithSystemPrefix)
+		{
+			Signal += Ls3wSystemIniName(System);
+			Signal += "_";
+		}
+		Signal += SignalName[System][sig];
+		AddUniqueSignal(Signals, Signal);
+	}
+	return Signals;
+}
+
+static std::string BuildLs3wPathSignalList(const Ls3wPathConfig &Path)
+{
+	std::vector<std::string> Signals;
+	for (int sys = GpsSystem; sys <= QzssSystem; ++sys)
+	{
+		std::vector<std::string> SystemSignals = CollectLs3wSignals(Path, sys, true);
+		for (size_t i = 0; i < SystemSignals.size(); ++i)
+			AddUniqueSignal(Signals, SystemSignals[i]);
+	}
+	return JoinSignals(Signals, " ");
+}
+
 static std::string BuildLs3wSignalList(const std::vector<Ls3wPathConfig> &Paths)
 {
-	std::string SignalList;
+	std::vector<std::string> Signals;
 	for (size_t path = 0; path < Paths.size(); ++path)
 	{
 		for (int sys = GpsSystem; sys <= QzssSystem; ++sys)
 		{
-			for (int sig = 0; sig < 8; ++sig)
-			{
-				if (!(Paths[path].FreqSelect[sys] & (1U << sig)))
-					continue;
-				std::string Signal = (sys == GpsSystem) ? "GPS_" :
-					(sys == BdsSystem) ? "BDS_" :
-					(sys == GalileoSystem) ? "GAL_" :
-					(sys == GlonassSystem) ? "GLO_" : "QZSS_";
-				Signal += SignalName[sys][sig];
-				if (SignalList.find(Signal) == std::string::npos)
-				{
-					if (!SignalList.empty())
-						SignalList += " ";
-					SignalList += Signal;
-				}
-			}
+			std::vector<std::string> SystemSignals = CollectLs3wSignals(Paths[path], sys, true);
+			for (size_t i = 0; i < SystemSignals.size(); ++i)
+				AddUniqueSignal(Signals, SystemSignals[i]);
 		}
 	}
-	return SignalList;
+	return JoinSignals(Signals, " ");
+}
+
+static std::string BuildLs3wSystemSummary(const std::vector<Ls3wPathConfig> &Paths, int System)
+{
+	std::vector<std::string> Signals;
+	for (size_t path = 0; path < Paths.size(); ++path)
+	{
+		std::vector<std::string> PathSignals = CollectLs3wSignals(Paths[path], System, false);
+		for (size_t i = 0; i < PathSignals.size(); ++i)
+			AddUniqueSignal(Signals, PathSignals[i]);
+	}
+	return JoinSignals(Signals, ",");
 }
 
 static bool WriteLs3wIni(const char *OutputFileName, const std::vector<Ls3wPathConfig> &Paths, int QuantBits)
@@ -1124,6 +1188,7 @@ static bool WriteLs3wIni(const char *OutputFileName, const std::vector<Ls3wPathC
 		fprintf(File, "[channel %c]\n", Name);
 		fprintf(File, "CF%c=%d\n", Name, Paths[i].CenterHz);
 		fprintf(File, "BW%c=%d\n", Name, Paths[i].BandwidthHz);
+		fprintf(File, "signal=%s\n", BuildLs3wPathSignalList(Paths[i]).c_str());
 		fprintf(File, "\n");
 	}
 
@@ -1132,6 +1197,11 @@ static bool WriteLs3wIni(const char *OutputFileName, const std::vector<Ls3wPathC
 	fprintf(File, "URL=https://github.com/globsky/SignalSim\n");
 	fprintf(File, "AUTHOR=globsky\n");
 	fprintf(File, "SIGNALS= %s\n", BuildLs3wSignalList(Paths).c_str());
+	fprintf(File, "GPS=%s\n", BuildLs3wSystemSummary(Paths, GpsSystem).c_str());
+	fprintf(File, "BDS=%s\n", BuildLs3wSystemSummary(Paths, BdsSystem).c_str());
+	fprintf(File, "Galileo=%s\n", BuildLs3wSystemSummary(Paths, GalileoSystem).c_str());
+	fprintf(File, "GLONASS=%s\n", BuildLs3wSystemSummary(Paths, GlonassSystem).c_str());
+	fprintf(File, "QZSS=%s\n", BuildLs3wSystemSummary(Paths, QzssSystem).c_str());
 	fclose(File);
 	printf("[INFO]\tIni file created: %s\n", IniFileName.c_str());
 	return true;
