@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <cctype>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -56,6 +57,7 @@ struct CommandArguments
 	bool MultiThread;
 	bool ValidateOnly;
 	bool OutputTag;
+	bool AssumeYes;
 };
 
 void UpdateSatParamList(GNSS_TIME CurTime, KINEMATIC_INFO CurPos, int ListCount, PSIGNAL_POWER PowerList, PIONO_PARAM IonoParam);
@@ -103,6 +105,9 @@ const char *SignalName[][8] = {
 	{ "G1", "G2", },
 	{ "L1CA", "L1C", "L2C", "L2P", "L5", },
 };
+static const double AMPLITUDE_1_2 = 0.7071067811865475244;
+static const double AMPLITUDE_1_4 = 0.5;
+static const double AMPLITUDE_29_44 = 0.811844140885988713377;
 
 int main(int argc, char* argv[])
 {
@@ -133,6 +138,7 @@ int main(int argc, char* argv[])
 	Arguments.MultiThread = true; // Default to use multi-threading
 	Arguments.ValidateOnly = false;
 	Arguments.OutputTag = false;
+	Arguments.AssumeYes = false;
 
 	SetOutputFile(stdout);
 //	SetOutputLevel(MSG_LEVEL_INFO);
@@ -906,6 +912,13 @@ struct Ls3wPathRuntime
 	int SignalCount[5] = {0, 0, 0, 0, 0};
 };
 
+struct SatelliteBudgetRow
+{
+	int System;
+	int Svid;
+	CSatelliteParam *Param;
+	std::vector<int> Signals;
+};
 static JsonObject* FindJsonChild(JsonObject *Object, const char *Key)
 {
 	for (JsonObject *Child = Object ? Object->GetFirstObject() : NULL; Child; Child = Child->GetNextObject())
@@ -923,6 +936,29 @@ static double JsonNumberValue(JsonObject *Object, double DefaultValue)
 	return DefaultValue;
 }
 
+static bool JsonBoolValue(JsonObject *Object, bool DefaultValue)
+{
+	if (!Object)
+		return DefaultValue;
+	if (Object->Type == JsonObject::ValueTypeTrue)
+		return true;
+	if (Object->Type == JsonObject::ValueTypeFalse)
+		return false;
+	return DefaultValue;
+}
+
+static bool ParseLs3wAssumeYes(JsonObject *RootObject)
+{
+	JsonObject *OutputObject = FindJsonChild(RootObject, "output");
+	if (JsonBoolValue(FindJsonChild(OutputObject, "yes"), false))
+		return true;
+	if (JsonBoolValue(FindJsonChild(OutputObject, "assumeYes"), false))
+		return true;
+	JsonObject *ConfirmObject = FindJsonChild(OutputObject, "confirmBeforeGenerate");
+	if (ConfirmObject)
+		return !JsonBoolValue(ConfirmObject, true);
+	return false;
+}
 static int ParseSystemName(const char *Name)
 {
 	if (strcmp(Name, "GPS") == 0)
@@ -1136,6 +1172,230 @@ static std::string BuildLs3wPathSignalList(const Ls3wPathConfig &Path)
 	return JoinSignals(Signals, " ");
 }
 
+static std::string BuildSignalListText(int System, const std::vector<int> &Signals)
+{
+	std::vector<std::string> Names;
+	for (size_t i = 0; i < Signals.size(); ++i)
+		AddUniqueSignal(Names, SignalName[System][Signals[i]]);
+	return JoinSignals(Names, ",");
+}
+
+static bool HasSignalIndex(const std::vector<int> &Signals, int SignalIndex)
+{
+	return std::find(Signals.begin(), Signals.end(), SignalIndex) != Signals.end();
+}
+
+static void AddSignalIndex(std::vector<int> &Signals, int SignalIndex)
+{
+	if (!HasSignalIndex(Signals, SignalIndex))
+		Signals.push_back(SignalIndex);
+}
+
+static double ComponentCn0(double TotalCn0, double Amplitude)
+{
+	return TotalCn0 + 20.0 * log10(Amplitude);
+}
+
+static std::string BuildComponentCn0Text(int System, int SignalIndex, double TotalCn0)
+{
+	char Buffer[160];
+	switch (System)
+	{
+	case GpsSystem:
+	case QzssSystem:
+		if (SignalIndex == SIGNAL_INDEX_L1C)
+		{
+			snprintf(Buffer, sizeof(Buffer), "%s:D=%.2f P=%.2f",
+				SignalName[System][SignalIndex],
+				ComponentCn0(TotalCn0, AMPLITUDE_1_4),
+				ComponentCn0(TotalCn0, AMPLITUDE_29_44));
+			return Buffer;
+		}
+		if (SignalIndex == SIGNAL_INDEX_L5)
+		{
+			snprintf(Buffer, sizeof(Buffer), "%s:D=%.2f P=%.2f",
+				SignalName[System][SignalIndex],
+				ComponentCn0(TotalCn0, AMPLITUDE_1_2),
+				ComponentCn0(TotalCn0, AMPLITUDE_1_2));
+			return Buffer;
+		}
+		break;
+	case BdsSystem:
+		if (SignalIndex == SIGNAL_INDEX_B1C)
+		{
+			snprintf(Buffer, sizeof(Buffer), "%s:D=%.2f P=%.2f",
+				SignalName[System][SignalIndex],
+				ComponentCn0(TotalCn0, AMPLITUDE_1_4),
+				ComponentCn0(TotalCn0, AMPLITUDE_29_44));
+			return Buffer;
+		}
+		if (SignalIndex == SIGNAL_INDEX_B2a)
+		{
+			snprintf(Buffer, sizeof(Buffer), "%s:D=%.2f P=%.2f",
+				SignalName[System][SignalIndex],
+				ComponentCn0(TotalCn0, AMPLITUDE_1_2),
+				ComponentCn0(TotalCn0, AMPLITUDE_1_2));
+			return Buffer;
+		}
+		break;
+	case GalileoSystem:
+		if (SignalIndex == SIGNAL_INDEX_E1 || SignalIndex == SIGNAL_INDEX_E5a || SignalIndex == SIGNAL_INDEX_E5b)
+		{
+			snprintf(Buffer, sizeof(Buffer), "%s:D=%.2f P=%.2f",
+				SignalName[System][SignalIndex],
+				ComponentCn0(TotalCn0, AMPLITUDE_1_2),
+				ComponentCn0(TotalCn0, AMPLITUDE_1_2));
+			return Buffer;
+		}
+		break;
+	}
+
+	snprintf(Buffer, sizeof(Buffer), "%s=%.2f", SignalName[System][SignalIndex], TotalCn0);
+	return Buffer;
+}
+
+static std::string BuildComponentListText(int System, const std::vector<int> &Signals, double TotalCn0)
+{
+	std::vector<std::string> Components;
+	for (size_t i = 0; i < Signals.size(); ++i)
+		Components.push_back(BuildComponentCn0Text(System, Signals[i], TotalCn0));
+	return JoinSignals(Components, "; ");
+}
+
+static const char *BudgetSystemName(int System)
+{
+	switch (System)
+	{
+	case GpsSystem: return "GPS";
+	case BdsSystem: return "BDS";
+	case GalileoSystem: return "GAL";
+	case GlonassSystem: return "GLO";
+	case QzssSystem: return "QZSS";
+	default: return "UNK";
+	}
+}
+
+static void AddBudgetRow(std::vector<SatelliteBudgetRow> &Rows, int System, int Svid, CSatelliteParam *Param, int SignalIndex)
+{
+	for (size_t i = 0; i < Rows.size(); ++i)
+	{
+		if (Rows[i].System == System && Rows[i].Svid == Svid)
+		{
+			AddSignalIndex(Rows[i].Signals, SignalIndex);
+			return;
+		}
+	}
+	SatelliteBudgetRow Row;
+	Row.System = System;
+	Row.Svid = Svid;
+	Row.Param = Param;
+	Row.Signals.push_back(SignalIndex);
+	Rows.push_back(Row);
+}
+
+static std::vector<SatelliteBudgetRow> CollectBudgetRows(const std::vector<Ls3wPathConfig> &Paths)
+{
+	std::vector<SatelliteBudgetRow> Rows;
+	for (size_t PathIndex = 0; PathIndex < Paths.size(); ++PathIndex)
+	{
+		const Ls3wPathConfig &Path = Paths[PathIndex];
+		for (int SignalIndex = SIGNAL_INDEX_L1CA; SignalIndex <= SIGNAL_INDEX_L5; ++SignalIndex)
+		{
+			if (!(Path.FreqSelect[GpsSystem] & (1U << SignalIndex)))
+				continue;
+			for (int i = 0; i < GpsSatNumber; ++i)
+				AddBudgetRow(Rows, GpsSystem, GpsEphVisible[i]->svid, &GpsSatParam[GpsEphVisible[i]->svid - 1], SignalIndex);
+		}
+		for (int SignalIndex = SIGNAL_INDEX_L1CA; SignalIndex <= SIGNAL_INDEX_L5; ++SignalIndex)
+		{
+			if (!(Path.FreqSelect[QzssSystem] & (1U << SignalIndex)))
+				continue;
+			for (int i = 0; i < QzssSatNumber; ++i)
+			{
+				if (!IsSignalHealthy(QzssSystem, SignalIndex, QzssEphVisible[i]))
+					continue;
+				int QzssIndex = QzssEphVisible[i]->svid - 193;
+				if (QzssIndex >= 0 && QzssIndex < TOTAL_QZSS_SAT)
+					AddBudgetRow(Rows, QzssSystem, QzssEphVisible[i]->svid, &QzssSatParam[QzssIndex], SignalIndex);
+			}
+		}
+		for (int SignalIndex = SIGNAL_INDEX_B1C; SignalIndex <= SIGNAL_INDEX_B2ab; ++SignalIndex)
+		{
+			if (!(Path.FreqSelect[BdsSystem] & (1U << SignalIndex)))
+				continue;
+			for (int i = 0; i < BdsSatNumber; ++i)
+				AddBudgetRow(Rows, BdsSystem, BdsEphVisible[i]->svid, &BdsSatParam[BdsEphVisible[i]->svid - 1], SignalIndex);
+		}
+		for (int SignalIndex = SIGNAL_INDEX_E1; SignalIndex <= SIGNAL_INDEX_E6; ++SignalIndex)
+		{
+			if (!(Path.FreqSelect[GalileoSystem] & (1U << SignalIndex)))
+				continue;
+			for (int i = 0; i < GalSatNumber; ++i)
+				AddBudgetRow(Rows, GalileoSystem, GalEphVisible[i]->svid, &GalSatParam[GalEphVisible[i]->svid - 1], SignalIndex);
+		}
+		for (int SignalIndex = SIGNAL_INDEX_G1; SignalIndex <= SIGNAL_INDEX_G2; ++SignalIndex)
+		{
+			if (!(Path.FreqSelect[GlonassSystem] & (1U << SignalIndex)))
+				continue;
+			for (int i = 0; i < GloSatNumber; ++i)
+				AddBudgetRow(Rows, GlonassSystem, GloEphVisible[i]->n, &GloSatParam[GloEphVisible[i]->n - 1], SignalIndex);
+		}
+	}
+
+	std::sort(Rows.begin(), Rows.end(), [](const SatelliteBudgetRow &A, const SatelliteBudgetRow &B) {
+		if (A.System != B.System)
+			return A.System < B.System;
+		return A.Svid < B.Svid;
+	});
+	for (size_t i = 0; i < Rows.size(); ++i)
+		std::sort(Rows[i].Signals.begin(), Rows[i].Signals.end());
+	return Rows;
+}
+
+static void PrintLs3wBudgetTable(const std::vector<Ls3wPathConfig> &Paths)
+{
+	std::vector<SatelliteBudgetRow> Rows = CollectBudgetRows(Paths);
+	printf("[INFO]\tPre-generation theoretical C/N0 and geometry budget:\n");
+	printf("+--------+------+----------------------+-------------+----------+----------+------------+-------------+-------------------------------+\n");
+	printf("| System | SVID | Signals              | Total C/N0  | Az (deg) | El (deg) | Range (m)  | Doppler Hz  | Component C/N0 dB-Hz          |\n");
+	printf("+--------+------+----------------------+-------------+----------+----------+------------+-------------+-------------------------------+\n");
+	for (size_t i = 0; i < Rows.size(); ++i)
+	{
+		double TotalCn0 = Rows[i].Param->CN0 / 100.0;
+		int FirstSignal = Rows[i].Signals.empty() ? 0 : Rows[i].Signals[0];
+		double TravelTime = Rows[i].Param->GetTravelTime(FirstSignal);
+		double Range = TravelTime * LIGHT_SPEED;
+		printf("| %-6s | %4d | %-20s | %9.2f   | %8.2f | %8.2f | %10.1f | %+11.1f | %-29s |\n",
+			BudgetSystemName(Rows[i].System),
+			Rows[i].Svid,
+			BuildSignalListText(Rows[i].System, Rows[i].Signals).c_str(),
+			TotalCn0,
+			RAD2DEG(Rows[i].Param->Azimuth),
+			RAD2DEG(Rows[i].Param->Elevation),
+			Range,
+			Rows[i].Param->GetDoppler(FirstSignal),
+			BuildComponentListText(Rows[i].System, Rows[i].Signals, TotalCn0).c_str());
+	}
+	printf("+--------+------+----------------------+-------------+----------+----------+------------+-------------+-------------------------------+\n");
+	printf("[INFO]\tBudget rows: %zu visible satellites. Component C/N0 uses generator data/pilot amplitudes.\n\n", Rows.size());
+}
+
+static bool ConfirmLs3wGeneration(bool AssumeYes)
+{
+	if (AssumeYes)
+	{
+		printf("[INFO]\tConfirmation skipped by --yes/config; continuing generation.\n\n");
+		return true;
+	}
+	printf("Continue generating waveform? [y/N] ");
+	fflush(stdout);
+	std::string Reply;
+	if (!std::getline(std::cin, Reply))
+		return false;
+	for (size_t i = 0; i < Reply.size(); ++i)
+		Reply[i] = (char)std::tolower((unsigned char)Reply[i]);
+	return Reply == "y" || Reply == "yes";
+}
 static std::string BuildLs3wSignalList(const std::vector<Ls3wPathConfig> &Paths)
 {
 	std::vector<std::string> Signals;
@@ -1682,6 +1942,17 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 		printf("\n");
 	}
 	printf("\n");
+
+	PrintLs3wBudgetTable(Ls3wPathConfigs);
+
+	bool AssumeYes = Arguments.AssumeYes || ParseLs3wAssumeYes(RootObject);
+	if (!Arguments.ValidateOnly && !ConfirmLs3wGeneration(AssumeYes))
+	{
+		for (int i = 0; i < (int)(sizeof(NavBitArray) / sizeof(NavBitArray[0])); ++i)
+			delete NavBitArray[i];
+		printf("[INFO]\tWaveform generation cancelled; no output file written.\n");
+		return 0;
+	}
 
 	std::vector<Ls3wPathRuntime> Paths(Ls3wPathConfigs.size());
 	for (size_t i = 0; i < Ls3wPathConfigs.size(); ++i)
@@ -2312,6 +2583,7 @@ void ShowHelp(const char* ProgramPath)
 	std::cout << "   -mt, 	--multi-thread     Force use multi-thread\n";
 	std::cout << "   -st, 	--single-thread    Force use single-thread\n";
 	std::cout << "   -t,  	--tag              Output tag file (output file name with .tag appended)\n";
+	std::cout << "   -y,  	--yes              Skip LS3W/WAVE confirmation prompt\n";
 	std::cout << "   -v, 	--version          Show version information\n";
 	std::cout << "   -h, 	--help             Show this help message\n\n";
 	std::cout << "Examples:\n";
@@ -2331,6 +2603,7 @@ bool ParseCommandLineArgs(int argc, char* argv[], CommandArguments &Arguments)
 		"--multi-thread", "-mt",	// 4
 		"--single-thread", "-st",	// 5
 		"--tag", "-t",	// 6
+		"--yes", "-y",	// 7
 	};
 	std::string arg;
 	int i = 1, index;
@@ -2373,6 +2646,9 @@ bool ParseCommandLineArgs(int argc, char* argv[], CommandArguments &Arguments)
 			break;
 		case 6:	// --tag
 			Arguments.OutputTag = true;
+			break;
+		case 7:	// --yes
+			Arguments.AssumeYes = true;
 			break;
 		default:
 			std::cout << "[WARNING] Unknown option " << arg << "\n";
