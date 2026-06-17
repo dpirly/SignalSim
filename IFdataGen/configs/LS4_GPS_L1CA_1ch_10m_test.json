@@ -1,0 +1,70 @@
+{
+  "version": 1.0,
+  "description": "LS4 output test: GPS L1CA in 1 RF channel at 10 Msps",
+  "time": {
+    "type": "UTC",
+    "year": 2021,
+    "month": 6,
+    "day": 19,
+    "hour": 0,
+    "minute": 0,
+    "second": 0
+  },
+  "trajectory": {
+    "name": "static gps l1ca 1ch 10m",
+    "initPosition": {
+      "type": "LLA",
+      "format": "d",
+      "longitude": 116.471006,
+      "latitude": 40.019450,
+      "altitude": 20
+    },
+    "initVelocity": {
+      "type": "SCU",
+      "speed": 0,
+      "course": 0
+    },
+    "trajectoryList": [
+      {
+        "type": "Const",
+        "time": 1.0
+      }
+    ]
+  },
+  "ephemeris": {
+    "type": "RINEX",
+    "name": "../EphData/BRDC00IGS_R_20211700000_01D_MN.rnx"
+  },
+  "output": {
+    "type": "IFdata",
+    "format": "LS4",
+    "sampleFreq": 10.0,
+    "name": "LS4_GPS_L1CA_1ch_10m_test.LS4",
+    "quantBits": 4,
+    "ls4Paths": [
+      {
+        "centerFreq": 1575.42,
+        "bandwidth": 8.0,
+        "sampleFreq": 10.0,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L1CA",
+            "enable": true
+          }
+        ]
+      }
+    ],
+    "config": {
+      "elevationMask": 3
+    }
+  },
+  "power": {
+    "noiseFloor": -172,
+    "initPower": {
+      "unit": "dBHz",
+      "value": 60
+    },
+    "elevationAdjust": false
+  }
+}

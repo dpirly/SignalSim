@@ -60,8 +60,8 @@ static const char *DictionaryListOutputType[] = {
 	"position", "observation", "IFdata", "baseband",
 };
 static const char *DictionaryListOutputFormat[] = {
-//     0      1       2      3       4       5      6      7      8       9       10
-	"ECEF", "LLA", "NMEA", "KML", "RINEX", "IQ8", "IQ4", "IQ2", "IQ16", "LS3W", "WAVE",
+//     0      1       2      3       4       5      6      7      8       9       10     11
+	"ECEF", "LLA", "NMEA", "KML", "RINEX", "IQ8", "IQ4", "IQ2", "IQ16", "LS3W", "WAVE", "LS4",
 };
 static const char *DictionaryListSignal[] = {
 //    0      1      2      3      4      5     6   7
