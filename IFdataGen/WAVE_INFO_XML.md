@@ -14,7 +14,7 @@ data for every channel.
 ```xml
 <?xml version='1.0' encoding='UTF-8'?>
 <info version="2" type="mch" mode="packed">
-  <WAVEFORM>waveform.dat</WAVEFORM>
+  <waveform>waveform.dat</waveform>
   <sample_rate>62500000</sample_rate>
   <sample_count>11250000000</sample_count>
   <duration>00:03:00.000</duration>
@@ -50,7 +50,7 @@ relationship that the generator and reader can handle.
 ```xml
 <?xml version='1.0' encoding='UTF-8'?>
 <info version="2" type="mch" mode="channelized">
-  <WAVEFORM>waveform.dat</WAVEFORM>
+  <waveform>waveform.dat</waveform>
   <sample_count>8100000000</sample_count>
   <duration>00:01:00.000</duration>
   <channel_count>3</channel_count>

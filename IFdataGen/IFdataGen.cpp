@@ -1587,7 +1587,7 @@ static std::string BuildWaveInfoXml(const std::vector<Ls3wPathConfig> &Paths, in
 	char Buffer[256];
 	std::string Xml = "<?xml version='1.0' encoding='UTF-8'?>\n";
 	Xml += "<info version=\"2\" type=\"mch\" mode=\"packed\">\n";
-	Xml += "  <WAVEFORM>" + XmlEscape(DataName) + "</WAVEFORM>\n";
+	Xml += "  <waveform>" + XmlEscape(DataName) + "</waveform>\n";
 	snprintf(Buffer, sizeof(Buffer), "  <sample_rate>%d</sample_rate>\n", OutputParam.SampleFreq * 1000);
 	Xml += Buffer;
 	snprintf(Buffer, sizeof(Buffer), "  <sample_count>%lld</sample_count>\n", SampleCount);
