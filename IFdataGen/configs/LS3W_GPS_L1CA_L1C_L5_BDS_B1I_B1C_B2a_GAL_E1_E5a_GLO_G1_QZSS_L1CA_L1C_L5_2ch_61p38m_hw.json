@@ -1,0 +1,155 @@
+{
+  "version": 1.0,
+  "description": "LS3W output: GPS L1CA/L1C/L5, BeiDou B1I/B1C/B2a, Galileo E1/E5a, GLONASS G1, and QZSS L1CA/L1C/L5 in 2 RF channels at 61.38 Msps",
+  "time": {
+    "type": "UTC",
+    "year": 2025,
+    "month": 1,
+    "day": 1,
+    "hour": 0,
+    "minute": 0,
+    "second": 0
+  },
+  "trajectory": {
+    "name": "static gps l1ca l1c l5 bds b1i b1c b2a gal e1 e5a glo g1 qzss l1ca l1c l5 2ch 61p38m",
+    "initPosition": {
+      "type": "LLA",
+      "format": "d",
+      "longitude": 116.477675,
+      "latitude": 40.025197,
+      "altitude": 50
+    },
+    "initVelocity": {
+      "type": "SCU",
+      "speed": 0,
+      "course": 0
+    },
+    "trajectoryList": [
+      {
+        "type": "Const",
+        "time": 180.0
+      }
+    ]
+  },
+  "ephemeris": {
+    "type": "RINEX",
+    "name": "../EphData/BRDC00IGS_R_20250010000_01D_MN.rnx"
+  },
+  "output": {
+    "type": "IFdata",
+    "format": "LS3W",
+    "sampleFreq": 61.38,
+    "name": "GPS_L1CA_L1C_L5_BDS_B1I_B1C_B2a_GAL_E1_E5a_GLO_G1_QZSS_L1CA_L1C_L5_2ch_61p38m_180s_3bit_hw.LS3W",
+    "quantBits": 3,
+    "ls3wPaths": [
+      {
+        "centerFreq": 1583.236,
+        "bandwidth": 50.0,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L1CA",
+            "enable": true
+          },
+          {
+            "system": "GPS",
+            "signal": "L1C",
+            "enable": true
+          },
+          {
+            "system": "BDS",
+            "signal": "B1I",
+            "enable": true
+          },
+          {
+            "system": "BDS",
+            "signal": "B1C",
+            "enable": true
+          },
+          {
+            "system": "Galileo",
+            "signal": "E1",
+            "enable": true
+          },
+          {
+            "system": "GLONASS",
+            "signal": "G1",
+            "enable": true
+          },
+          {
+            "system": "QZSS",
+            "signal": "L1CA",
+            "enable": true
+          },
+          {
+            "system": "QZSS",
+            "signal": "L1C",
+            "enable": true
+          }
+        ]
+      },
+      {
+        "centerFreq": 1176.45,
+        "bandwidth": 50.0,
+        "systemSelect": [
+          {
+            "system": "GPS",
+            "signal": "L5",
+            "enable": true
+          },
+          {
+            "system": "BDS",
+            "signal": "B2a",
+            "enable": true
+          },
+          {
+            "system": "Galileo",
+            "signal": "E5a",
+            "enable": true
+          },
+          {
+            "system": "QZSS",
+            "signal": "L5",
+            "enable": true
+          }
+        ]
+      }
+    ],
+    "config": {
+      "elevationMask": 10,
+      "maskOut": [
+        {
+          "system": "BDS",
+          "svid": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18
+          ]
+        }
+      ]
+    }
+  },
+  "power": {
+    "noiseFloor": -172,
+    "initPower": {
+      "unit": "dBHz",
+      "value": 53
+    },
+    "elevationAdjust": false
+  }
+}
