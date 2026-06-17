@@ -21,7 +21,7 @@ data for every channel.
   <quant_bits>3</quant_bits>
   <channel_count>3</channel_count>
   <sample_frame_bits>18</sample_frame_bits>
-  <signal>GPS_L1CA GPS_L1C GPS_L2C GPS_L5</signal>
+  <signal>GPS L1C/A L1C L2C L5</signal>
 
   <channel index="0">
     <center_frequency>1582244000</center_frequency>
@@ -54,7 +54,7 @@ relationship that the generator and reader can handle.
   <sample_count>8100000000</sample_count>
   <duration>00:01:00.000</duration>
   <channel_count>3</channel_count>
-  <signal>GPS_L1CA GPS_L1C GPS_L5 BDS_B1I BDS_B2A</signal>
+  <signal>GPS L1C/A L1C L5, Beidou B1I B2a</signal>
 
   <channel index="0">
     <center_frequency>1582244000</center_frequency>

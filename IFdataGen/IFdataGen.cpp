@@ -1463,6 +1463,54 @@ static std::string BuildLs3wSignalList(const std::vector<Ls3wPathConfig> &Paths)
 	return JoinSignals(Signals, " ");
 }
 
+static const char *WaveSystemDisplayName(int System)
+{
+	switch (System)
+	{
+	case GpsSystem: return "GPS";
+	case BdsSystem: return "Beidou";
+	case GalileoSystem: return "Galileo";
+	case GlonassSystem: return "GLONASS";
+	case QzssSystem: return "QZSS";
+	default: return "";
+	}
+}
+
+static const char *WaveSignalDisplayName(int System, int SignalIndex)
+{
+	if ((System == GpsSystem || System == QzssSystem) && SignalIndex == SIGNAL_INDEX_L1CA)
+		return "L1C/A";
+	if (System == GalileoSystem && SignalIndex == SIGNAL_INDEX_E1)
+		return "E1B/C";
+	return SignalName[System][SignalIndex];
+}
+
+static std::string BuildWaveSignalList(const std::vector<Ls3wPathConfig> &Paths)
+{
+	std::vector<std::string> SystemTexts;
+	for (int sys = GpsSystem; sys <= QzssSystem; ++sys)
+	{
+		std::vector<std::string> Signals;
+		for (size_t path = 0; path < Paths.size(); ++path)
+		{
+			for (int sig = 0; sig < 8; ++sig)
+			{
+				if (!(Paths[path].FreqSelect[sys] & (1U << sig)) || !SignalName[sys][sig])
+					continue;
+				AddUniqueSignal(Signals, WaveSignalDisplayName(sys, sig));
+			}
+		}
+		if (!Signals.empty())
+		{
+			std::string Text = WaveSystemDisplayName(sys);
+			Text += " ";
+			Text += JoinSignals(Signals, " ");
+			SystemTexts.push_back(Text);
+		}
+	}
+	return JoinSignals(SystemTexts, ", ");
+}
+
 static std::string BuildLs3wSystemSummary(const std::vector<Ls3wPathConfig> &Paths, int System)
 {
 	std::vector<std::string> Signals;
@@ -1599,7 +1647,7 @@ static std::string BuildWaveInfoXml(const std::vector<Ls3wPathConfig> &Paths, in
 	Xml += Buffer;
 	snprintf(Buffer, sizeof(Buffer), "  <sample_frame_bits>%zu</sample_frame_bits>\n", Paths.size() * QuantBits * 2);
 	Xml += Buffer;
-	std::string SignalList = BuildLs3wSignalList(Paths);
+	std::string SignalList = BuildWaveSignalList(Paths);
 	if (!SignalList.empty())
 		Xml += "  <signal>" + XmlEscape(SignalList) + "</signal>\n";
 	for (size_t i = 0; i < Paths.size(); ++i)
