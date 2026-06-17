@@ -59,7 +59,8 @@ void CSatIfSignal::GetIfSample(GNSS_TIME CurTime)
 
 	if (!SatParam)
 		return;
-	Amp = pow(10, (SatParam->CN0 - 3000) / 2000.) / sqrt(SampleNumber);
+	// Match C/N0 to complex baseband noise power E[I^2 + Q^2].
+	Amp = sqrt(2.0) * pow(10, (SatParam->CN0 - 3000) / 2000.) / sqrt(SampleNumber);
 	SignalTime = StartTransmitTime;
 	SatelliteSignal.GetSatelliteSignal(SignalTime, DataSignal, PilotSignal);
 //	EndCarrierPhase = GetCarrierPhase(SatParam, SignalIndex);
@@ -70,8 +71,9 @@ void CSatIfSignal::GetIfSample(GNSS_TIME CurTime)
 	// calculate start/end signal phase and phase step (actual local signal phase is negative ADR)
 	PhaseStep = (StartCarrierPhase - EndCarrierPhase) / SampleNumber;
 	PhaseStep += IfFreq / 1000. / SampleNumber;
-	CurPhase = StartCarrierPhase - (int)StartCarrierPhase;
-	CurPhase = 1 - CurPhase;	// carrier is fractional part of negative of travel time, equvalent to 1 minus positive fractional part
+	const double IfPhase = fmod(IfFreq * fmod(CurTime.MilliSeconds + CurTime.SubMilliSeconds, 1000.0) / 1000.0, 1.0);
+	CurPhase = IfPhase - StartCarrierPhase;	// negative carrier phase plus continuous IF phase
+	CurPhase -= floor(CurPhase);
 	if (SatParam->system == GlonassSystem && (SatParam->FreqID & 1) && (CurTime.MilliSeconds & 1))
 		CurPhase += 0.5;
 	CurIntPhase = (unsigned int)std::floor(CurPhase * 4294967296.);
