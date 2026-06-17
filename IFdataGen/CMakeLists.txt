@@ -132,4 +132,35 @@ message(STATUS "OpenMP found           : ${OpenMP_CXX_FOUND}")
 message(STATUS "IPO / LTO supported    : ${IPO_OK}")
 message(STATUS "Host-CPU tuning enabled: ${USE_NATIVE_OPT}")
 
-# TODO: Add tests and install targets if needed.
+# ============================================================================
+# Install and package
+# ============================================================================
+
+install(TARGETS IFdataGen
+        RUNTIME DESTINATION IFdataGen)
+
+install(DIRECTORY configs/
+        DESTINATION IFdataGen/configs
+        FILES_MATCHING
+        PATTERN "WAVE*.json"
+        PATTERN "WAVE*.conf"
+        PATTERN "LS3W*.json"
+        PATTERN "LS3W*.conf")
+
+install(DIRECTORY tools/
+        DESTINATION IFdataGen/tools
+        FILES_MATCHING
+        PATTERN "*.py")
+
+install(DIRECTORY ../EphData/
+        DESTINATION EphData
+        FILES_MATCHING
+        PATTERN "*.rnx"
+        PATTERN "*.nav")
+
+set(CPACK_GENERATOR "ZIP")
+set(CPACK_PACKAGE_NAME "SignalSim_IFdataGen")
+set(CPACK_PACKAGE_VENDOR "SignalSim")
+set(CPACK_PACKAGE_VERSION "1.0.0")
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+include(CPack)

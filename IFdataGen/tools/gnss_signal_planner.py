@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """GNSS frequency planning GUI for SignalSim IF data configurations.
 
-The tool is intentionally self-contained and uses only tkinter.  It follows the
-same working idea as the LabSat 3 Wideband frequency setup page: choose GNSS
-signals, inspect the RF coverage, then decide how many RF bands are required.
+The tool is intentionally self-contained and uses only tkinter.  It helps choose
+GNSS signals, inspect RF coverage, and decide how many RF bands are required.
 """
 
 from __future__ import annotations
@@ -78,6 +77,9 @@ SIGNALS: Sequence[Signal] = (
     Signal("gps_l1c", "GPS", "L1C", "L1", 1575.420, 4.092, "L1"),
     Signal("gps_l2c", "GPS", "L2C", "L2", 1227.600, 2.046, "L2"),
     Signal("gps_l5", "GPS", "L5", "L5", 1176.450, 20.460, "L5"),
+    Signal("qzss_l1ca", "QZSS", "L1 C/A", "L1", 1575.420, 2.046, "L1"),
+    Signal("qzss_l1c", "QZSS", "L1C", "L1", 1575.420, 4.092, "L1"),
+    Signal("qzss_l5", "QZSS", "L5", "L5", 1176.450, 20.460, "L5"),
     Signal("gal_e1", "Galileo", "E1", "E1", 1575.420, 4.092, "L1"),
     Signal("gal_e5a", "Galileo", "E5a", "E5a", 1176.450, 20.460, "L5"),
     Signal("gal_e5b", "Galileo", "E5b", "E5b", 1207.140, 20.460, "L2"),
@@ -114,11 +116,12 @@ SIGNALS: Sequence[Signal] = (
     ),
 )
 
-CONSTELLATION_ORDER = ("GPS", "Galileo", "BeiDou", "GLONASS")
+CONSTELLATION_ORDER = ("GPS", "Galileo", "BeiDou", "GLONASS", "QZSS")
 GROUP_ORDER = {"L1": 0, "L2": 1, "L5": 2, "E6": 3}
 SIGNAL_ORDER = {signal.key: idx for idx, signal in enumerate(SIGNALS)}
 COLORS = {
     "GPS": "#2b7de9",
+    "QZSS": "#d68910",
     "Galileo": "#8e44ad",
     "BeiDou": "#1f9d55",
     "GLONASS": "#c0392b",
@@ -126,6 +129,7 @@ COLORS = {
 
 SYSTEM_EXPORT_NAMES = {
     "GPS": "GPS",
+    "QZSS": "QZSS",
     "Galileo": "Galileo",
     "BeiDou": "BDS",
     "GLONASS": "GLONASS",
@@ -136,6 +140,9 @@ SIGNAL_EXPORT_NAMES = {
     "gps_l1c": "L1C",
     "gps_l2c": "L2C",
     "gps_l5": "L5",
+    "qzss_l1ca": "L1CA",
+    "qzss_l1c": "L1C",
+    "qzss_l5": "L5",
     "gal_e1": "E1",
     "gal_e5a": "E5a",
     "gal_e5b": "E5b",
@@ -275,7 +282,7 @@ class GnssPlanner(tk.Tk):
         width = min(1600, max(1280, self.winfo_screenwidth() - 80))
         height = min(1040, max(960, self.winfo_screenheight() - 90))
         self.geometry(f"{width}x{height}")
-        self.minsize(1280, 760)
+        self.minsize(1280, 900)
 
         self.signal_vars: Dict[str, tk.BooleanVar] = {}
         self.max_bands = 3
@@ -300,6 +307,7 @@ class GnssPlanner(tk.Tk):
         self.current_band_fs_mhz: List[float] = []
         self.current_band_bw_div: List[int] = []
         self.current_sample_freq_mhz = 0.0
+        self.config_sample_freq_mhz = 0.0
 
         self._build_ui()
         self._sync_date_text()
@@ -372,7 +380,7 @@ class GnssPlanner(tk.Tk):
 
         title = ttk.Label(
             right,
-            text="LabSat-style RF channel planner",
+            text="RF channel planner",
             font=("TkDefaultFont", 12, "bold"),
         )
         title.grid(row=0, column=0, sticky="w")
@@ -393,7 +401,7 @@ class GnssPlanner(tk.Tk):
         for idx in range(3):
             canvas = tk.Canvas(
                 chart_frame,
-                height=210,
+                height=320,
                 bg="white",
                 highlightthickness=1,
                 highlightbackground="#b0b0b0",
@@ -711,6 +719,7 @@ class GnssPlanner(tk.Tk):
     def _clear_selection(self) -> None:
         for var in self.signal_vars.values():
             var.set(False)
+        self.config_sample_freq_mhz = 0.0
         self.update_view()
 
     def update_view(self) -> None:
@@ -737,6 +746,8 @@ class GnssPlanner(tk.Tk):
             fs_mhz = round_up(band.span_mhz / usable, step)
             fs_values.append(fs_mhz)
         packed_sample_freq_mhz = max(fs_values) if fs_values else 0.0
+        if fmt in ("LS3W", "WAVE") and self.config_sample_freq_mhz > 0.0:
+            packed_sample_freq_mhz = self.config_sample_freq_mhz
         if fmt == "LS4":
             base_sample_freq_mhz, output_fs_values, bw_divs = plan_ls4_sample_rates(fs_values, step)
         else:
@@ -876,6 +887,7 @@ class GnssPlanner(tk.Tk):
                 self.duration_s.set(float(first_item["time"]))
 
         sample_freq = float(output.get("sampleFreq", 0.0))
+        self.config_sample_freq_mhz = sample_freq if fmt in ("LS3W", "WAVE") else 0.0
         paths = output.get("ls4Paths" if fmt == "LS4" else "ls3wPaths", [])
         if not paths:
             paths = output.get("paths", [])
