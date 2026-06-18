@@ -37,6 +37,8 @@ SOURCES = $(TARGET).cpp \
           $(SRCDIR)/LNavBit.cpp \
           $(SRCDIR)/MessageOutput.cpp \
           $(SRCDIR)/NavBit.cpp \
+          $(SRCDIR)/NavICL1NavBit.cpp \
+          $(SRCDIR)/NavICLNavBit.cpp \
           $(SRCDIR)/NavData.cpp \
           $(SRCDIR)/PilotBit.cpp \
           $(SRCDIR)/PowerControl.cpp \

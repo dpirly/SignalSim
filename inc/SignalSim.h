@@ -25,6 +25,8 @@
 #include "BCNav2Bit.h"
 #include "BCNav3Bit.h"
 #include "GNavBit.h"
+#include "NavICL1NavBit.h"
+#include "NavICLNavBit.h"
 #include "JsonParser.h"
 #include "XmlInterpreter.h"
 #include "JsonInterpreter.h"

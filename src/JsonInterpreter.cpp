@@ -32,16 +32,16 @@ static const char *KeyDictionaryListEphAlm[] = {
 	"type", "name",
 };
 static const char *KeyDictionaryListOutput[] = {
-//     0        1        2         3          4            5               6             7          8        9       10        11          12            13
-	"type", "format", "name", "interval", "config", "systemSelect", "elevationMask", "maskOut", "system", "svid", "signal", "enable", "sampleFreq", "centerFreq",
+//     0        1        2         3          4            5               6             7          8        9       10        11          12            13            14                       15
+	"type", "format", "name", "interval", "config", "systemSelect", "elevationMask", "maskOut", "system", "svid", "signal", "enable", "sampleFreq", "centerFreq", "disableNavigationData", "navicL1Waveform",
 };
 static const char *KeyDictionaryListPower[] = {
 //       0             1              2                 3           4       5         6        7         8            9      10
 	"noiseFloor", "initPower", "elevationAdjust", "signalPower", "unit", "value", "system", "svid", "powerValue", "epoch", "time",
 };
 static const char *DictionaryListSystem[] = {
-//    0      1      2        3          4          5
-	"UTC", "GPS", "BDS", "Galileo", "GLONASS", "QZSS",
+//    0      1      2        3          4          5       6       7
+	"UTC", "GPS", "BDS", "Galileo", "GLONASS", "QZSS", "SBAS", "NavIC",
 };
 static const char *DictionaryListCoordinate[] = {
 //    0      1       2      3     4     5     6      7        8       9      10     11      12
@@ -70,6 +70,8 @@ static const char *DictionaryListSignal[] = {
 	"E1",  "E5a", "E5b", "E5",  "E6",  "",    "", "",
 	"G1",  "G2",  "G3",  "",    "",    "",    "", "",
 	"L1CA","L1C", "L2C", "L2P", "L5",  "",    "", "",
+	"",    "",    "",    "",    "",    "",    "", "",
+	"I1SD","I1SP","I5S", "",    "",    "",    "", "",
 };
 static const char *DictionaryListPowerUnit[] = {
 //     0      1      2
@@ -93,6 +95,7 @@ static TrajectoryType GetTrajectorySegment(JsonObject *Object, TrajectoryDataTyp
 static BOOL ProcessConfigParam(JsonObject *Object, OUTPUT_PARAM &OutputParam);
 static BOOL ProcessMaskOut(JsonObject *Object, OUTPUT_PARAM &OutputParam);
 static BOOL MaskOutSatellite(int system, int svid, OUTPUT_PARAM &OutputParam);
+static BOOL ProcessDisableNavigationData(JsonObject *Object, OUTPUT_PARAM &OutputParam);
 static BOOL ProcessSystemSelect(JsonObject *Object, OUTPUT_PARAM &OutputParam);
 static BOOL ProcessSignalPower(JsonObject *Object, CPowerControl &PowerControl);
 static BOOL ProcessPowerValue(JsonObject *Object, int system, int *svlist, int sv_number, CPowerControl &PowerControl);
@@ -264,13 +267,18 @@ BOOL SetOutputParam(JsonObject *Object, OUTPUT_PARAM &OutputParam)
 
 	// set default value
 	OutputParam.filename[0] = 0;
-	OutputParam.GpsMaskOut = OutputParam.GlonassMaskOut = OutputParam.QzssMaskOut = 0;
+	OutputParam.GpsMaskOut = OutputParam.GlonassMaskOut = OutputParam.QzssMaskOut = OutputParam.NavICMaskOut = 0;
 	OutputParam.BdsMaskOut = OutputParam.GalileoMaskOut = 0LL;
 	OutputParam.ElevationMask = DEG2RAD(5);
 	OutputParam.Interval = 1000;
+	OutputParam.NavICL1Sboc = FALSE;
 	// default output GPS L1 only
-	OutputParam.FreqSelect[0] = 0x1;
-	OutputParam.FreqSelect[1] = OutputParam.FreqSelect[2] = OutputParam.FreqSelect[3] = OutputParam.FreqSelect[4] = 0;
+	for (int i = 0; i < GNSS_SYSTEM_NUMBER; i ++)
+	{
+		OutputParam.FreqSelect[i] = 0;
+		OutputParam.NavDataDisableMask[i] = 0;
+	}
+	OutputParam.FreqSelect[GpsSystem] = 0x1;
 
 	for (; Object; Object = Object->GetNextObject())
 	{
@@ -477,7 +485,7 @@ TrajectoryType GetTrajectorySegment(JsonObject *Object, TrajectoryDataType &Data
 
 BOOL ProcessConfigParam(JsonObject *Object, OUTPUT_PARAM &OutputParam)
 {
-	JsonObject *MaskOutArray;
+	JsonObject *ConfigArray;
 
 	for (; Object; Object = Object->GetNextObject())
 	{
@@ -488,13 +496,32 @@ BOOL ProcessConfigParam(JsonObject *Object, OUTPUT_PARAM &OutputParam)
 		case 7:	// "maskOut"
 			if (Object->Type == JsonObject::ValueTypeArray)
 			{
-				MaskOutArray = Object->GetFirstObject();
-				while (MaskOutArray)
+				ConfigArray = Object->GetFirstObject();
+				while (ConfigArray)
 				{
-					ProcessMaskOut(MaskOutArray->GetFirstObject(), OutputParam);
-					MaskOutArray = MaskOutArray->GetNextObject();
+					ProcessMaskOut(ConfigArray->GetFirstObject(), OutputParam);
+					ConfigArray = ConfigArray->GetNextObject();
 				}
 			}
+			break;
+		case 14: // "disableNavigationData"
+			if (Object->Type == JsonObject::ValueTypeArray)
+			{
+				ConfigArray = Object->GetFirstObject();
+				while (ConfigArray)
+				{
+					ProcessDisableNavigationData(ConfigArray->GetFirstObject(), OutputParam);
+					ConfigArray = ConfigArray->GetNextObject();
+				}
+			}
+			break;
+		case 15: // "navicL1Waveform"
+			if (Object->Type == JsonObject::ValueTypeString)
+				OutputParam.NavICL1Sboc = (strcmp(Object->String, "SBOC") == 0 || strcmp(Object->String, "sboc") == 0) ? TRUE : FALSE;
+			else if (Object->Type == JsonObject::ValueTypeTrue)
+				OutputParam.NavICL1Sboc = TRUE;
+			else if (Object->Type == JsonObject::ValueTypeFalse)
+				OutputParam.NavICL1Sboc = FALSE;
 			break;
 		}
 	}
@@ -561,9 +588,44 @@ BOOL MaskOutSatellite(int system, int svid, OUTPUT_PARAM &OutputParam)
 		else if (svid >= 1 && svid <= 10)
 			OutputParam.QzssMaskOut |= (1 << (svid - 1));
 		break;
+	case NavICSystem:
+		if (svid >= 1 && svid <= 14)
+			OutputParam.NavICMaskOut |= (1 << (svid - 1));
+		break;
 	default:
 		return FALSE;
 	}
+
+	return TRUE;
+}
+
+BOOL ProcessDisableNavigationData(JsonObject *Object, OUTPUT_PARAM &OutputParam)
+{
+	int system = GpsSystem, signal = -1;
+
+	for (; Object; Object = Object->GetNextObject())
+	{
+		switch (SearchDictionary(Object->Key, PARAMETER(KeyDictionaryListOutput)))
+		{
+		case 8:	// "system"
+			if (Object->Type == JsonObject::ValueTypeString)
+				system = (GnssSystem)(SearchDictionary(Object->String, PARAMETER(DictionaryListSystem)) - 1);
+			break;
+		case 10: // "signal"
+			if (Object->Type == JsonObject::ValueTypeString)
+				signal = SearchDictionary(Object->String, PARAMETER(DictionaryListSignal));
+			break;
+		}
+	}
+
+	if (signal >= 0 && system == QzssSystem && (signal / 8) == GpsSystem)
+		signal = QzssSystem * 8 + (signal % 8);
+	if (signal < 0 || system < 0 || (signal / 8) != system)
+		return FALSE;
+	signal %= 8;
+	if (system == NavICSystem && signal != SIGNAL_INDEX_I1SD && signal != SIGNAL_INDEX_I1SP && signal != SIGNAL_INDEX_I5S)
+		return FALSE;
+	OutputParam.NavDataDisableMask[system] |= (1U << signal);
 
 	return TRUE;
 }
@@ -596,6 +658,8 @@ BOOL ProcessSystemSelect(JsonObject *Object, OUTPUT_PARAM &OutputParam)
 				else
 					signal %= 8;
 				if (system == QzssSystem && signal != SIGNAL_INDEX_L1CA && signal != SIGNAL_INDEX_L1C && signal != SIGNAL_INDEX_L5)
+					break;
+				if (system == NavICSystem && signal != SIGNAL_INDEX_I1SD && signal != SIGNAL_INDEX_I1SP && signal != SIGNAL_INDEX_I5S)
 					break;
 				if (Object->Type == JsonObject::ValueTypeTrue)
 					OutputParam.FreqSelect[system] |= (1 << signal);

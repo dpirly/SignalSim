@@ -6,10 +6,56 @@
 //
 //----------------------------------------------------------------------
 
+#include <string.h>
+
 #include "SatelliteParam.h"
 
 static const unsigned int SecondaryCodeL5[1] = { 0x72b20 };
 static const unsigned int SecondaryCodeE1[1] = { 0x9b501c };
+static unsigned int SecondaryCodeNavICI1SP[14 * 57];
+static bool SecondaryCodeNavICI1SPInitialized = false;
+
+static const unsigned int NavICI1SPOR0Init[14] = {
+	0x01bb, 0x01e8, 0x0301, 0x01b6, 0x0118, 0x00fc, 0x0065,
+	0x03c5, 0x00cc, 0x021a, 0x0049, 0x01ab, 0x0170, 0x00b3,
+};
+
+static const unsigned int NavICI1SPOR1Init[14] = {
+	0x0130, 0x0182, 0x0391, 0x0173, 0x02c6, 0x02af, 0x0388,
+	0x0050, 0x02fc, 0x0115, 0x0304, 0x01de, 0x0273, 0x026a,
+};
+
+static void ShiftNavICI1SPOverlay(unsigned int &R0, unsigned int &R1)
+{
+	unsigned int R0A = (R0 << 5) ^ (R0 << 2) ^ (R0 << 1) ^ R0;
+	unsigned int S2A = ((R0 << 5) ^ (R0 << 2)) & ((R0 << 1) ^ R0);
+	unsigned int S2B = ((R0 << 5) & (R0 << 2)) ^ ((R0 << 1) & R0);
+	unsigned int R1A = S2A ^ S2B ^ (R0 << 6) ^ (R0 << 3) ^ (R0 << 2) ^ R0;
+	unsigned int R1B = (R1 << 5) ^ (R1 << 2) ^ (R1 << 1) ^ R1;
+	R0 = ((R0 << 1) & 0x3ff) | ((R0A >> 9) & 1);
+	R1 = ((R1 << 1) & 0x3ff) | (((R1A ^ R1B) >> 9) & 1);
+}
+
+static void InitNavICI1SPOverlay()
+{
+	if (SecondaryCodeNavICI1SPInitialized)
+		return;
+	memset(SecondaryCodeNavICI1SP, 0, sizeof(SecondaryCodeNavICI1SP));
+	for (int prn = 0; prn < 14; prn++)
+	{
+		unsigned int R0 = NavICI1SPOR0Init[prn];
+		unsigned int R1 = NavICI1SPOR1Init[prn];
+		unsigned int *Code = SecondaryCodeNavICI1SP + prn * 57;
+		for (int i = 0; i < 1800; i++)
+		{
+			if ((R1 >> 9) & 1)
+				Code[i / 32] |= (1u << (i & 0x1f));
+			ShiftNavICI1SPOverlay(R0, R1);
+		}
+	}
+	SecondaryCodeNavICI1SPInitialized = true;
+}
+
 static const unsigned int SecondaryCodeB1C[63*57] = {
 // for PRN 01 B1C secondary code
 0xc62f397a, 0x217f3dd1, 0xfac44c61, 0x1d6249ef, 0x20b2b2d4, 0x3946abd8, 0xc6d64c7f, 0x08d2066e, 
@@ -1483,6 +1529,20 @@ const unsigned int *GetPilotBits(GnssSystem System, int SatSignal, int svid, int
 		case SIGNAL_INDEX_L5:
 			Length = 20;
 			return SecondaryCodeL5;
+		default: return NULL;
+		}
+	case NavICSystem:
+		switch (SatSignal)
+		{
+		case SIGNAL_INDEX_I1SD:
+		case SIGNAL_INDEX_I5S:
+			return NULL;
+		case SIGNAL_INDEX_I1SP:
+			if (svid < 1 || svid > 14)
+				return NULL;
+			InitNavICI1SPOverlay();
+			Length = 1800;
+			return SecondaryCodeNavICI1SP + 57 * (svid - 1);
 		default: return NULL;
 		}
 	default: return NULL;	// unknown system

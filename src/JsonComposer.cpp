@@ -50,8 +50,8 @@
 #endif
 
 static const char *DictionaryListSystem[] = {
-//    0      1      2        3          4          5
-	"UTC", "GPS", "BDS", "Galileo", "GLONASS", "QZSS",
+//    0      1      2        3          4          5       6       7
+	"UTC", "GPS", "BDS", "Galileo", "GLONASS", "QZSS", "SBAS", "NavIC",
 };
 static const char *KeyDictionaryListTime[] = {
 //     0      1        2          3         4      5        6       7        8
@@ -82,6 +82,8 @@ static const char *DictionaryListSignal[] = {
 	"E1",  "E5a", "E5b", "E5",  "E6",  "",    "", "",
 	"G1",  "G2",  "G3",  "",    "",    "",    "", "",
 	"L1CA","L1C", "L2C", "L2P", "L5",  "",    "", "",
+	"",    "",    "",    "",    "",    "",    "", "",
+	"I1SD","I1SP","I5S", "",    "",    "",    "", "",
 };
 #if 0
 static const char *KeyDictionaryListParam[] = {
@@ -547,8 +549,10 @@ JsonObject *ComposeMaskOut(GnssSystem System, unsigned long long MaskOut)
 {
 	JsonObject *Root = NULL, *SvListObject = NULL, *CurObject = NULL;
 	int SvNumber = (int)popcnt64(MaskOut);
-	int MaxSvid[] = { 32, 63, 36, 24, 10 };
+	int MaxSvid[] = { 32, 63, 36, 24, 10, 0, 14 };
 
+	if (System < GpsSystem || System > NavICSystem || MaxSvid[System] == 0)
+		return NULL;
 	MaskOut &= (1ULL << MaxSvid[System]) - 1;
 	if (SvNumber == 0)
 		return NULL;

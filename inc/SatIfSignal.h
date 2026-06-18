@@ -16,11 +16,13 @@ class CSatIfSignal
 public:
 	CSatIfSignal(int MsSampleNumber, int SatIfFreq, GnssSystem SatSystem, int SatSignalIndex, unsigned char SatId);
 	~CSatIfSignal();
+	static void SetNavICL1SbocEnabled(BOOL Enabled);
 	void InitState(GNSS_TIME CurTime, CSatelliteParam *pSatParam, NavBit* pNavData);
 	void GetIfSample(GNSS_TIME CurTime);
 	complex_number *SampleArray;
 
 private:
+	static BOOL NavICL1SbocEnabled;
 	int SampleNumber;	// sample number within 1ms
 	int IfFreq;	// must be multiple of 500 (for GLONASS) or 1000 (other signal)
 	GnssSystem System;

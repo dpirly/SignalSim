@@ -24,8 +24,9 @@ int GetVisibleSatellite(KINEMATIC_INFO Position, GNSS_TIME time, OUTPUT_PARAM Ou
 
 	for (i = 0; i < Number; i ++)
 	{
-			if (Eph[i] == NULL || Eph[i]->valid == 0 || (system != QzssSystem && Eph[i]->health != 0))
-				continue;
+		if (Eph[i] == NULL || Eph[i]->valid == 0 || (system != QzssSystem && Eph[i]->health != 0) ||
+			(system == NavICSystem && Eph[i]->ura >= 15))
+			continue;
 		if (system == GpsSystem)
 		{
 			if (OutputParam.GpsMaskOut & (1 << i))
@@ -45,6 +46,11 @@ int GetVisibleSatellite(KINEMATIC_INFO Position, GNSS_TIME time, OUTPUT_PARAM Ou
 		{
 			int QzssIndex = Eph[i]->svid - 193;
 			if (QzssIndex < 0 || QzssIndex >= 10 || (OutputParam.QzssMaskOut & (1UL << QzssIndex)))
+				continue;
+		}
+		else if (system == NavICSystem)
+		{
+			if (Eph[i]->svid < 1 || Eph[i]->svid > 14 || (OutputParam.NavICMaskOut & (1UL << (Eph[i]->svid - 1))))
 				continue;
 		}
 		else
@@ -185,6 +191,11 @@ void GetSatelliteParam(KINEMATIC_INFO PositionEcef, LLA_POSITION PositionLla, GN
 			SatelliteParam->GroupDelay[SIGNAL_INDEX_E5] = (Eph->tgd_ext[2] + Eph->tgd_ext[4]) / 2;	// E5
 			SatelliteParam->GroupDelay[SIGNAL_INDEX_E6] = Eph->tgd_ext[4];	// E6
 			break;
+		case NavICSystem:
+			SatelliteParam->GroupDelay[SIGNAL_INDEX_I1SD] = Eph->tgd;
+			SatelliteParam->GroupDelay[SIGNAL_INDEX_I1SP] = Eph->tgd;
+			SatelliteParam->GroupDelay[SIGNAL_INDEX_I5S] = Eph->tgd * 4.487029111531189; // (2492.028 / 1176.45)^2
+			break;
 		}
 	}
 	SatelliteParam->TravelTime = TravelTime;
@@ -257,6 +268,14 @@ double GetIonoDelay(double IonoDelayL1, int system, int SignalIndex)
 		case SIGNAL_INDEX_E6 : return IonoDelayL1 * 1.517824; // (154/125)^2
 		default: return IonoDelayL1;
 		}
+	case NavICSystem:
+		switch (SignalIndex)
+		{
+		case SIGNAL_INDEX_I1SD:
+		case SIGNAL_INDEX_I1SP: return IonoDelayL1;
+		case SIGNAL_INDEX_I5S : return IonoDelayL1 * 1.7932703213610586011342155009452; // (154/115)^2
+		default: return IonoDelayL1;
+		}
 	default: return IonoDelayL1;
 	}
 }
@@ -302,6 +321,14 @@ double GetWaveLength(int system, int SignalIndex, int FreqID)
 	case GlonassSystem:
 		Freq = (SignalIndex == SIGNAL_INDEX_G1) ? (1602e6 + 562500 * FreqID) : (1246e6 + 437500 * FreqID);
 		return LIGHT_SPEED / Freq;
+	case NavICSystem:
+		switch (SignalIndex)
+		{
+		case SIGNAL_INDEX_I1SD:
+		case SIGNAL_INDEX_I1SP: return LIGHT_SPEED / FREQ_NAVIC_L1;
+		case SIGNAL_INDEX_I5S : return LIGHT_SPEED / FREQ_NAVIC_L5;
+		default: return LIGHT_SPEED / FREQ_NAVIC_L1;
+		}
 	default: return LIGHT_SPEED / FREQ_GPS_L1;
 	}
 }
@@ -547,6 +574,11 @@ void CSatelliteParam::CalculateParam(KINEMATIC_INFO PositionEcef, LLA_POSITION P
 			GroupDelay[SIGNAL_INDEX_E5] = (EphCur->tgd_ext[2] + EphCur->tgd_ext[4]) / 2;	// E5
 			GroupDelay[SIGNAL_INDEX_E6] = EphCur->tgd_ext[4];	// E6
 			break;
+		case NavICSystem:
+			GroupDelay[SIGNAL_INDEX_I1SD] = EphCur->tgd;
+			GroupDelay[SIGNAL_INDEX_I1SP] = EphCur->tgd;
+			GroupDelay[SIGNAL_INDEX_I5S] = EphCur->tgd * 4.487029111531189; // (2492.028 / 1176.45)^2
+			break;
 		}
 	}
 	RelativeSpeed = SatRelativeSpeed(&PositionEcef, &PosVel) - LIGHT_SPEED * EphCur->af1;
@@ -640,6 +672,14 @@ double CSatelliteParam::GetWaveLength(int SignalIndex)
 	case GlonassSystem:
 		Freq = (SignalIndex == SIGNAL_INDEX_G1) ? (1602e6 + 562500 * FreqID) : (1246e6 + 437500 * FreqID);
 		return LIGHT_SPEED / Freq;
+	case NavICSystem:
+		switch (SignalIndex)
+		{
+		case SIGNAL_INDEX_I1SD:
+		case SIGNAL_INDEX_I1SP: return LIGHT_SPEED / FREQ_NAVIC_L1;
+		case SIGNAL_INDEX_I5S : return LIGHT_SPEED / FREQ_NAVIC_L5;
+		default: return LIGHT_SPEED / FREQ_NAVIC_L1;
+		}
 	default: return LIGHT_SPEED / FREQ_GPS_L1;
 	}
 }
@@ -678,6 +718,14 @@ double CSatelliteParam::GetIonoDelayFactor(int SignalIndex)
 		case SIGNAL_INDEX_E5b: return 1.7032461936225222637173226084458; // (154/118)^2
 		case SIGNAL_INDEX_E5 : return 1.7473889738252684705925693971154; // (154/116.5)^2
 		case SIGNAL_INDEX_E6 : return 1.517824; // (154/125)^2
+		default: return 1.0;
+		}
+	case NavICSystem:
+		switch (SignalIndex)
+		{
+		case SIGNAL_INDEX_I1SD:
+		case SIGNAL_INDEX_I1SP: return 1.0;
+		case SIGNAL_INDEX_I5S : return 1.7932703213610586011342155009452; // (154/115)^2
 		default: return 1.0;
 		}
 	default: return 1.0;

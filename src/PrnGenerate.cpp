@@ -42,6 +42,47 @@ const unsigned int PrnGenerate::QzssL5IPrnInit[10] = {
 const unsigned int PrnGenerate::QzssL5QPrnInit[10] = {
 0x1387, 0x0d3a, 0x0c66, 0x010c, 0x0a2d, 0x1057, 0x0671, 0x08e6, 0x0965, 0x1c57, };
 
+const unsigned int PrnGenerate::NavICI5SG2Init[14] = {
+0b1110100111, 0b0000100110, 0b1000110100, 0b0101110010, 0b1110110000,
+0b0001101011, 0b0000010100, 0b0100110000, 0b0010011000, 0b1101100100,
+0b0001001100, 0b1101111100, 0b1011010010, 0b0111101010, };
+
+const unsigned long long PrnGenerate::NavICI1SDR0Init[14] = {
+00061727026503255544ULL, 01660130752435362260ULL, 00676457016477551225ULL,
+01763467705267605701ULL, 01614265052776007236ULL, 01446113457553463523ULL,
+01467417471470124574ULL, 00022513456555401603ULL, 00004420115402210365ULL,
+00072276243316574510ULL, 01632356715721616750ULL, 01670164755420300763ULL,
+01752127524253360255ULL, 00262220014044243135ULL, };
+
+const unsigned long long PrnGenerate::NavICI1SDR1Init[14] = {
+00377627103341647600ULL, 00047555332635133703ULL, 00570574070736102152ULL,
+00511013576745450615ULL, 01216243446624447775ULL, 00176452272675511054ULL,
+00151055342317137706ULL, 01127720116046071664ULL, 00514407436155575524ULL,
+00253070462740453542ULL, 00573371306324706336ULL, 01315135317732077306ULL,
+01170303027726635012ULL, 01637171270537414673ULL, };
+
+const unsigned int PrnGenerate::NavICI1SDCInit[14] = {
+0b10100, 0b10100, 0b00110, 0b10100, 0b10100, 0b00110, 0b10100,
+0b00110, 0b00110, 0b00110, 0b10100, 0b00110, 0b10100, 0b00110, };
+
+const unsigned long long PrnGenerate::NavICI1SPR0Init[14] = {
+00227743641272102303ULL, 00603070242564637717ULL, 00746325144437416120ULL,
+00023763714573206044ULL, 00155575663373106723ULL, 00022277536552741033ULL,
+00137757627072411730ULL, 00413034001670700216ULL, 00501123675324707024ULL,
+00013727517464264567ULL, 00663351450332761127ULL, 01450710073416110356ULL,
+01716542347100366110ULL, 00743601273016301212ULL, };
+
+const unsigned long long PrnGenerate::NavICI1SPR1Init[14] = {
+01667217344450257245ULL, 00300642746017221737ULL, 00474006332201753645ULL,
+00613606702460402137ULL, 01465531713404064713ULL, 01063646422557130427ULL,
+01066060465055002004ULL, 00225574416605070652ULL, 01733560674073230405ULL,
+01116277147142260461ULL, 00152604753526345370ULL, 01110300535412261305ULL,
+01046105227571557243ULL, 01020346561064461527ULL, };
+
+const unsigned int PrnGenerate::NavICI1SPCInit[14] = {
+0b01000, 0b00000, 0b01000, 0b00000, 0b01000, 0b01000, 0b00000,
+0b01000, 0b00000, 0b00000, 0b00000, 0b01000, 0b01000, 0b00000, };
+
 const int PrnGenerate::QzssL1CDataInsertIndex[10] = {
  9753, 4799,10126,  241, 1245, 1274, 1456, 9967,  235,  512, };
 
@@ -172,6 +213,8 @@ const PrnAttribute PrnGenerate::PrnAttributes[] = {
 	{  2046,       4,         4, PRN_ATTRIBUTE_BOC },	// index  8 for E1
 	{  5115,       1,         1,                 0 },	// index  9 for E6
 	{   511,       1,         1,                 0 },	// index 10 for G1/G2
+	{  1023,       1,         1,                 0 },	// index 11 for NavIC I5S
+	{  2046,      10,        10, PRN_ATTRIBUTE_BOC },	// index 12 for NavIC I1S
 };
 
 LsfrSequence::LsfrSequence(unsigned int InitState, unsigned int Polynomial, int Length) : mInitState(InitState), mPolynomial(Polynomial), mOutputMask(1<<(Length-1))
@@ -368,6 +411,36 @@ PrnGenerate::PrnGenerate(GnssSystem System, int SignalIndex, int Svid)
 			Attribute = NULL;
 		}
 		break;
+	case NavICSystem:
+		if (Svid < 1 || Svid > 14)
+		{
+			DataPrn = NULL; PilotPrn = NULL;
+			Attribute = NULL;
+			break;
+		}
+		switch (SignalIndex)
+		{
+		case SIGNAL_INDEX_I1SD:
+			DataPrn = GetNavICI1S(Svid, false);
+			PilotPrn = NULL;
+			Attribute = &PrnAttributes[12];
+			break;
+		case SIGNAL_INDEX_I1SP:
+			DataPrn = new int[10230];
+			memset(DataPrn, 0, sizeof(int) * 10230);
+			PilotPrn = GetNavICI1S(Svid, true);
+			Attribute = &PrnAttributes[12];
+			break;
+		case SIGNAL_INDEX_I5S:
+			DataPrn = GetNavICI5S(Svid);
+			PilotPrn = NULL;
+			Attribute = &PrnAttributes[11];
+			break;
+		default:
+			DataPrn = NULL; PilotPrn = NULL;
+			Attribute = NULL;
+		}
+		break;
 	default:	// unknown system
 		DataPrn = NULL; PilotPrn = NULL;
 		Attribute = NULL;
@@ -436,6 +509,75 @@ int *PrnGenerate::GetQzssL5(int Prn, bool Pilot)
 		Xb = (Xb >> 1) | (XbFeedback << 12);
 	}
 
+	return PrnSequence;
+}
+
+unsigned int PrnGenerate::ReverseRegister(unsigned int Reg, int Depth)
+{
+	unsigned int Reversed = 0;
+	for (int i = 0; i < Depth; i ++)
+	{
+		Reversed = (Reversed << 1) | (Reg & 1);
+		Reg >>= 1;
+	}
+	return Reversed;
+}
+
+int PrnGenerate::LfsrOutput(unsigned int &Reg, unsigned int Tap, int Depth)
+{
+	int Output = Reg & 1;
+	unsigned int Feedback = Reg & Tap;
+	Feedback ^= Feedback >> 16;
+	Feedback ^= Feedback >> 8;
+	Feedback ^= Feedback >> 4;
+	Feedback ^= Feedback >> 2;
+	Feedback ^= Feedback >> 1;
+	Reg = (Reg >> 1) | ((Feedback & 1) << (Depth - 1));
+	return Output;
+}
+
+int *PrnGenerate::GetNavICI5S(int Prn)
+{
+	int *PrnSequence = new int[1023];
+	unsigned int G1 = 0b1111111111;
+	unsigned int G2 = ReverseRegister(NavICI5SG2Init[Prn - 1], 10);
+
+	for (int i = 0; i < 1023; i ++)
+	{
+		int G1Out = LfsrOutput(G1, 0b0010000001, 10);
+		int G2Out = LfsrOutput(G2, 0b0110010111, 10);
+		PrnSequence[i] = G1Out ^ G2Out;
+	}
+	return PrnSequence;
+}
+
+unsigned long long PrnGenerate::ShiftNavICI1S(unsigned long long &R0, unsigned long long &R1, unsigned int &C)
+{
+	unsigned long long R0A = (R0 << 50) ^ (R0 << 45) ^ (R0 << 40) ^ (R0 << 20) ^ (R0 << 10) ^ (R0 << 5) ^ R0;
+	unsigned long long S2A = ((R0 << 50) ^ (R0 << 45) ^ (R0 << 40)) & ((R0 << 20) ^ (R0 << 10) ^ (R0 << 5) ^ R0);
+	unsigned long long S2B = (((R0 << 50) ^ (R0 << 45)) & (R0 << 40)) ^ (((R0 << 20) ^ (R0 << 10)) & ((R0 << 5) ^ R0));
+	unsigned long long S2C = ((R0 << 50) & (R0 << 45)) ^ ((R0 << 20) & (R0 << 10)) ^ ((R0 << 5) & R0);
+	unsigned long long S2 = S2A ^ S2B ^ S2C;
+	unsigned long long R1A = S2 ^ (R0 << 40) ^ (R0 << 35) ^ (R0 << 30) ^ (R0 << 25) ^ (R0 << 15) ^ R0;
+	unsigned long long R1B = (R1 << 50) ^ (R1 << 45) ^ (R1 << 40) ^ (R1 << 20) ^ (R1 << 10) ^ (R1 << 5) ^ R1;
+	R0 = ((R0 << 1) & 0x7fffffffffffffULL) | ((R0A >> 54) & 1ULL);
+	R1 = ((R1 << 1) & 0x7fffffffffffffULL) | (((R1A ^ R1B) >> 54) & 1ULL);
+	C = ((C << 1) & 0x1f) | ((C >> 4) & 1);
+	return R1;
+}
+
+int *PrnGenerate::GetNavICI1S(int Prn, bool Pilot)
+{
+	int *PrnSequence = new int[10230];
+	unsigned long long R0 = Pilot ? NavICI1SPR0Init[Prn - 1] : NavICI1SDR0Init[Prn - 1];
+	unsigned long long R1 = Pilot ? NavICI1SPR1Init[Prn - 1] : NavICI1SDR1Init[Prn - 1];
+	unsigned int C = Pilot ? NavICI1SPCInit[Prn - 1] : NavICI1SDCInit[Prn - 1];
+
+	for (int i = 0; i < 10230; i ++)
+	{
+		PrnSequence[i] = ((C >> 4) ^ (R1 >> 54)) & 1;
+		ShiftNavICI1S(R0, R1, C);
+	}
 	return PrnSequence;
 }
 

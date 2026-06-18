@@ -17,19 +17,21 @@
 
 CNavData::CNavData()
 {
-	GpsEphemerisNumber = BdsEphemerisNumber = GalileoEphemerisNumber = GlonassEphemerisNumber = QzssEphemerisNumber = 0;
+	GpsEphemerisNumber = BdsEphemerisNumber = GalileoEphemerisNumber = GlonassEphemerisNumber = QzssEphemerisNumber = NavICEphemerisNumber = 0;
 	GpsEphemerisPool = (PGPS_EPHEMERIS)malloc(sizeof(GPS_EPHEMERIS) * EPH_NUMBER_INIT);
 	BdsEphemerisPool = (PGPS_EPHEMERIS)malloc(sizeof(GPS_EPHEMERIS) * EPH_NUMBER_INIT);
 	GalileoEphemerisPool = (PGPS_EPHEMERIS)malloc(sizeof(GPS_EPHEMERIS) * EPH_NUMBER_INIT);
 	GlonassEphemerisPool = (PGLONASS_EPHEMERIS)malloc(sizeof(GLONASS_EPHEMERIS) * EPH_NUMBER_INIT);
 	QzssEphemerisPool = (PGPS_EPHEMERIS)malloc(sizeof(GPS_EPHEMERIS) * EPH_NUMBER_INIT);
-	GpsEphemerisPoolSize = BdsEphemerisPoolSize = GalileoEphemerisPoolSize = GlonassEphemerisPoolSize = QzssEphemerisPoolSize = EPH_NUMBER_INIT;
+	NavICEphemerisPool = (PGPS_EPHEMERIS)malloc(sizeof(GPS_EPHEMERIS) * EPH_NUMBER_INIT);
+	GpsEphemerisPoolSize = BdsEphemerisPoolSize = GalileoEphemerisPoolSize = GlonassEphemerisPoolSize = QzssEphemerisPoolSize = NavICEphemerisPoolSize = EPH_NUMBER_INIT;
 	memset(&GpsUtcParam, 0, sizeof(UTC_PARAM));
 	memset(GpsAlmanac, 0, sizeof(GpsAlmanac));
 	memset(BdsAlmanac, 0, sizeof(BdsAlmanac));
 	memset(GalileoAlmanac, 0, sizeof(GalileoAlmanac));
 	memset(GlonassAlmanac, 0, sizeof(GlonassAlmanac));
 	memset(QzssAlmanac, 0, sizeof(QzssAlmanac));
+	memset(NavICAlmanac, 0, sizeof(NavICAlmanac));
 	// set default FreqID for each glonass SLOT
 	GlonassSlotFreq[ 0] =  1; GlonassSlotFreq[ 1] = -4; GlonassSlotFreq[ 2] =  5; GlonassSlotFreq[ 3] =  6;
 	GlonassSlotFreq[ 4] =  1; GlonassSlotFreq[ 5] = -4; GlonassSlotFreq[ 6] =  5; GlonassSlotFreq[ 7] =  6;
@@ -46,6 +48,7 @@ CNavData::~CNavData()
 	free(GalileoEphemerisPool);
 	free(GlonassEphemerisPool);
 	free(QzssEphemerisPool);
+	free(NavICEphemerisPool);
 }
 
 NavFileType CNavData::CheckNavFileType(FILE *fp)
@@ -150,6 +153,18 @@ bool CNavData::AddNavData(NavDataType Type, void *NavData)
 		memcpy(&QzssEphemerisPool[QzssEphemerisNumber], NavData, sizeof(GPS_EPHEMERIS));
 		QzssEphemerisNumber ++;
 		break;
+	case NavDataNavICLnav:
+		if (NavICEphemerisNumber == NavICEphemerisPoolSize)
+		{
+			NavICEphemerisPoolSize *= 2;
+			NewEphmerisPool = (PGPS_EPHEMERIS)realloc(NavICEphemerisPool, sizeof(GPS_EPHEMERIS) * NavICEphemerisPoolSize);
+			if (NewEphmerisPool == NULL)
+				return false;
+			NavICEphemerisPool = NewEphmerisPool;
+		}
+		memcpy(&NavICEphemerisPool[NavICEphemerisNumber], NavData, sizeof(GPS_EPHEMERIS));
+		NavICEphemerisNumber ++;
+		break;
 	case NavDataBdsD1D2:
 	case NavDataBdsCnav1:
 	case NavDataBdsCnav2:
@@ -249,6 +264,11 @@ PGPS_EPHEMERIS CNavData::FindEphemeris(GnssSystem system, GNSS_TIME time, int sv
 		EphemerisPool = QzssEphemerisPool;
 		EphemerisNumber = QzssEphemerisNumber;
 	}
+	else if (system == NavICSystem)
+	{
+		EphemerisPool = NavICEphemerisPool;
+		EphemerisNumber = NavICEphemerisNumber;
+	}
 	else
 		return (PGPS_EPHEMERIS)0;
 
@@ -256,8 +276,10 @@ PGPS_EPHEMERIS CNavData::FindEphemeris(GnssSystem system, GNSS_TIME time, int sv
 	{
 		if (svid != EphemerisPool[i].svid)	// not same svid
 			continue;
-			if (system != QzssSystem && EphemerisPool[i].health != 0)
-				continue;
+		if (system != QzssSystem && EphemerisPool[i].health != 0)
+			continue;
+		if (system == NavICSystem && EphemerisPool[i].ura >= 15)
+			continue;
 /*		if ((system == GpsSystem) && (EphemerisPool[i].toe % 1200) != 0)	// filter out toe not multiple of 2^4 and 300
 			continue;
 		else if ((system == BdsSystem) && (EphemerisPool[i].toe % 600) != 0)	// filter out toe not multiple of 2^3 and 300
@@ -425,6 +447,12 @@ void CNavData::CompleteAlmanac(GnssSystem system, UTC_TIME time)
 	{
 		Almanac = QzssAlmanac;
 		AlmanacNumber = QzssSatNumber;
+		gnss_time = UtcToGpsTime(time);
+	}
+	else if (system == NavICSystem)
+	{
+		Almanac = NavICAlmanac;
+		AlmanacNumber = NavICSatNumber;
 		gnss_time = UtcToGpsTime(time);
 	}
 	else if (system == GlonassSystem)

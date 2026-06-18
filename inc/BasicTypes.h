@@ -18,6 +18,7 @@ typedef int BOOL;
 #endif
 
 typedef enum { GpsSystem, BdsSystem, GalileoSystem, GlonassSystem, QzssSystem, SbasSystem, NavICSystem } GnssSystem;
+#define GNSS_SYSTEM_NUMBER			(NavICSystem + 1)
 
 // signal index for different GNSS system
 #define SIGNAL_INDEX_L1CA			0
@@ -43,6 +44,10 @@ typedef enum { GpsSystem, BdsSystem, GalileoSystem, GlonassSystem, QzssSystem, S
 
 #define SIGNAL_INDEX_G1				0
 #define SIGNAL_INDEX_G2				1
+
+#define SIGNAL_INDEX_I1SD			0
+#define SIGNAL_INDEX_I1SP			1
+#define SIGNAL_INDEX_I5S			2
 
 typedef struct
 {
@@ -303,18 +308,21 @@ typedef struct
 	unsigned long GpsMaskOut;
 	unsigned long GlonassMaskOut;
 	unsigned long QzssMaskOut;
+	unsigned long NavICMaskOut;
 	unsigned long long BdsMaskOut;
 	unsigned long long GalileoMaskOut;
 	double ElevationMask;
 	int Interval;	// in millisecond
 	int SampleFreq, CenterFreq;	// in kHz
-	unsigned int FreqSelect[5];	// Frequency select mask, 0~4 for GPS/BDS/Galileo/GLONASS/QZSS respectively, bit selection uses SIGNAL_INDEX_XXXX
+	unsigned int FreqSelect[GNSS_SYSTEM_NUMBER];	// Frequency select mask indexed by GnssSystem, bit selection uses SIGNAL_INDEX_XXXX
+	unsigned int NavDataDisableMask[GNSS_SYSTEM_NUMBER];	// Navigation data disable mask indexed by GnssSystem
+	BOOL NavICL1Sboc;	// use NavIC L1 SBOC components instead of the BOC(1,1) approximation
 } OUTPUT_PARAM, *POUTPUT_PARAM;
 
 typedef struct
 {
-	double SystemDelay[5];	// system time difference to GPS, 0 for GPS (always 0), 1 for BDS, 2 for Galileo, 3 for GLONASS, 4 for QZSS
-	double ReceiverDelay[5][8];	// receiver RF delay difference for each frequency to primary frequency, [][0] always 0
+	double SystemDelay[GNSS_SYSTEM_NUMBER];	// system time difference to GPS, 0 for GPS (always 0)
+	double ReceiverDelay[GNSS_SYSTEM_NUMBER][8];	// receiver RF delay difference for each frequency to primary frequency, [][0] always 0
 } DELAY_CONFIG, *PDELAY_CONFIG;
 
 typedef struct

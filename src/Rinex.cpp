@@ -169,9 +169,9 @@ NavDataType LoadNavFileContents(FILE *fp_nav, void *NavData)
 			DataType = NavDataUnknown;
 		}
 	}
-	else if (str[0] == 'G' || str[0] == 'C' || str[0] == 'E' || str[0] == 'J')
+	else if (str[0] == 'G' || str[0] == 'C' || str[0] == 'E' || str[0] == 'J' || str[0] == 'I')
 	{
-		DataType = (str[0] == 'G') ? NavDataGpsLnav : (str[0] == 'C') ? NavDataBdsD1D2 : (str[0] == 'E') ? NavDataGalileoINav : NavDataQzssLnav;
+		DataType = (str[0] == 'G') ? NavDataGpsLnav : (str[0] == 'C') ? NavDataBdsD1D2 : (str[0] == 'E') ? NavDataGalileoINav : (str[0] == 'J') ? NavDataQzssLnav : NavDataNavICLnav;
 		DecodeEphParam(DataType, str, fp_nav, (PGPS_EPHEMERIS)NavData);
 	}
 	else if (str[0] == 'R')	// GLONASS
@@ -390,7 +390,6 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 		case NavDataBdsD1D2:
 		case NavDataGalileoINav:
 		case NavDataGalileoFNav:
-		case NavDataNavICLnav:
 			LineCount --;
 		case NavDataGpsCnav:
 		case NavDataQzssCnav:
@@ -400,11 +399,15 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 		case NavDataQzssCnav2:
 		case NavDataBdsCnav1:
 		case NavDataBdsCnav2:
-		    Eph->valid = 1;      // Ephemeris valid
+			Eph->valid = 1;      // Ephemeris valid
+			break;
+		case NavDataNavICLnav:
+			LineCount = 6;
+			Eph->valid = 1;      // Ephemeris valid
 			break;
 		default:
 			LineCount = 0;
-		    Eph->valid = 0;      // unknown data type, Ephemeris invalid
+			Eph->valid = 0;      // unknown data type, Ephemeris invalid
 			break;
 	}
 	svid = ReadContentsTime(str, &time, &data[0]);
@@ -586,13 +589,17 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 		case NavDataNavICLnav:
 			Eph->axis_dot = 0.0;
 			Eph->delta_n_dot = 0.0;
-			Eph->iodc = (unsigned short)data[26];      /* IODC */
-			Eph->iode = (unsigned char)Eph->iodc;      /* IODE/AODE */
+			Eph->iode = (unsigned char)data[3];      /* IODEC */
+			Eph->iodc = Eph->iode;      /* IODC */
 			Eph->week = (int)data[21];      /* week number */
 			Eph->health = (unsigned short)data[24];      /* sv health */
 			Eph->ura = GetUraIndex(data[23]);
-			Eph->flag = (unsigned short)data[20] | ((unsigned short)data[22] << 2) | ((data[28] > 4.0) ? 8 : 0);
+			if (Eph->ura < 0) Eph->ura = 0;
+			Eph->flag = 0;
 			Eph->tgd = data[25];      /* TGD */
+			Eph->tgd2 = Eph->tgd * TGD_GAMME_L5;
+			Eph->tgd_ext[2] = Eph->tgd_ext[3] = Eph->tgd * TGD_GAMME_L5;
+			Eph->tgd_ext[4] = Eph->tgd;
 			Eph->source = EPH_SOURCE_LNAV;
 			break;
 	}

@@ -154,6 +154,9 @@
     <ClInclude Include="..\inc\LNavBit.h" />
     <ClInclude Include="..\inc\MessageOutput.h" />
     <ClInclude Include="..\inc\NavBit.h" />
+    <ClInclude Include="..\inc\NavICL1Ldpc.h" />
+    <ClInclude Include="..\inc\NavICL1NavBit.h" />
+    <ClInclude Include="..\inc\NavICLNavBit.h" />
     <ClInclude Include="..\inc\NavData.h" />
     <ClInclude Include="..\inc\PilotBit.h" />
     <ClInclude Include="..\inc\PowerControl.h" />
@@ -188,6 +191,8 @@
     <ClCompile Include="..\src\LNavBit.cpp" />
     <ClCompile Include="..\src\MessageOutput.cpp" />
     <ClCompile Include="..\src\NavBit.cpp" />
+    <ClCompile Include="..\src\NavICL1NavBit.cpp" />
+    <ClCompile Include="..\src\NavICLNavBit.cpp" />
     <ClCompile Include="..\src\NavData.cpp" />
     <ClCompile Include="..\src\PilotBit.cpp" />
     <ClCompile Include="..\src\PowerControl.cpp" />

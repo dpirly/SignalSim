@@ -40,6 +40,7 @@ static int64_t GetFileOffset(FILE *File)
 #define TOTAL_GAL_SAT 36
 #define TOTAL_GLO_SAT 24
 #define TOTAL_QZSS_SAT 10
+#define TOTAL_NAVIC_SAT 14
 #define TOTAL_SAT_CHANNEL 128
 
 typedef enum {
@@ -48,6 +49,9 @@ typedef enum {
     DataBitD1D2, DataBitBCNav1, DataBitBCNav2, DataBitBCNav3,	// for BDS
     DataBitINav, DataBitFNav, DataBitECNav,	// for Galileo
     DataBitSbas, // for SBAS
+    DataBitNavICL1Nav, // for NavIC L1-SPS
+    DataBitNavICLNav, // for NavIC L5-SPS
+    DataBitCount
 } DataBitType;
 
 struct CommandArguments
@@ -67,6 +71,7 @@ complex_number GenerateNoise(unsigned int &Seed, double Sigma);
 NavBit* GetNavData(GnssSystem SatSystem, int SatSignalIndex, NavBit* NavBitArray[]);
 static bool IsSignalHealthy(GnssSystem System, int SignalIndex, PGPS_EPHEMERIS Eph);
 static int CountHealthyQzssChannels(unsigned int FreqSelect);
+static int CountNavICChannels(unsigned int FreqSelect);
 int QuantSamplesIQ2(complex_number Samples[], int Length, unsigned char QuantSamples[], double GainScale);	//TODO: Varify 2-bit quantization
 int QuantSamplesIQ4(complex_number Samples[], int Length, unsigned char QuantSamples[], double GainScale);
 int QuantSamplesIQ8(complex_number Samples[], int Length, unsigned char QuantSamples[], double GainScale);
@@ -88,15 +93,19 @@ PGPS_EPHEMERIS BdsEph[TOTAL_BDS_SAT], BdsEphVisible[TOTAL_BDS_SAT];
 PGPS_EPHEMERIS GalEph[TOTAL_GAL_SAT], GalEphVisible[TOTAL_GAL_SAT];
 PGLONASS_EPHEMERIS GloEph[TOTAL_GLO_SAT], GloEphVisible[TOTAL_GLO_SAT];
 PGPS_EPHEMERIS QzssEph[TOTAL_QZSS_SAT], QzssEphVisible[TOTAL_QZSS_SAT];
+PGPS_EPHEMERIS NavICEph[TOTAL_NAVIC_SAT], NavICEphVisible[TOTAL_NAVIC_SAT];
+IONO_PARAM NavICZeroIono = {0};
 //SATELLITE_PARAM GpsSatParam[TOTAL_GPS_SAT], BdsSatParam[TOTAL_BDS_SAT], GalSatParam[TOTAL_GAL_SAT], GloSatParam[TOTAL_GLO_SAT];	// satellite parameter array at CurTime
-CSatelliteParam GpsSatParam[TOTAL_GPS_SAT], BdsSatParam[TOTAL_BDS_SAT], GalSatParam[TOTAL_GAL_SAT], GloSatParam[TOTAL_GLO_SAT], QzssSatParam[TOTAL_QZSS_SAT];
-int GpsSatNumber, BdsSatNumber, GalSatNumber, GloSatNumber, QzssSatNumber;	// number of visible satellite
+CSatelliteParam GpsSatParam[TOTAL_GPS_SAT], BdsSatParam[TOTAL_BDS_SAT], GalSatParam[TOTAL_GAL_SAT], GloSatParam[TOTAL_GLO_SAT], QzssSatParam[TOTAL_QZSS_SAT], NavICSatParam[TOTAL_NAVIC_SAT];
+int GpsSatNumber, BdsSatNumber, GalSatNumber, GloSatNumber, QzssSatNumber, NavICSatNumber;	// number of visible satellite
 const int SignalCenterFreq[][8] = {
 	{ FREQ_GPS_L1, FREQ_GPS_L1, FREQ_GPS_L2, FREQ_GPS_L2, FREQ_GPS_L5 },
 	{ FREQ_BDS_B1C, FREQ_BDS_B1I, FREQ_BDS_B2I, FREQ_BDS_B3I, FREQ_BDS_B2a, FREQ_BDS_B2b, FREQ_BDS_B2ab },
 	{ FREQ_GAL_E1, FREQ_GAL_E5a, FREQ_GAL_E5b, FREQ_GAL_E5, FREQ_GAL_E6 },
 	{ FREQ_GLO_G1, FREQ_GLO_G2 },
 	{ FREQ_GPS_L1, FREQ_GPS_L1, FREQ_GPS_L2, FREQ_GPS_L2, FREQ_GPS_L5 },
+	{ 0 },
+	{ FREQ_NAVIC_L1, FREQ_NAVIC_L1, FREQ_NAVIC_L5 },
 };
 const char *SignalName[][8] = {
 	{ "L1CA", "L1C", "L2C", "L2P", "L5", },
@@ -104,6 +113,8 @@ const char *SignalName[][8] = {
 	{ "E1", "E5a", "E5b", "E5", "E6", },
 	{ "G1", "G2", },
 	{ "L1CA", "L1C", "L2C", "L2P", "L5", },
+	{ "", },
+	{ "I1SD", "I1SP", "I5S", },
 };
 static const double AMPLITUDE_1_2 = 0.7071067811865475244;
 static const double AMPLITUDE_1_4 = 0.5;
@@ -118,7 +129,7 @@ int main(int argc, char* argv[])
 	LLA_POSITION StartPos;
 	KINEMATIC_INFO CurPos;
 	LOCAL_SPEED StartVel;
-	NavBit *NavBitArray[12];
+	NavBit *NavBitArray[DataBitCount];
 	GLONASS_TIME GlonassTime;
 	GNSS_TIME BdsTime;
 	int ListCount;
@@ -153,7 +164,7 @@ int main(int argc, char* argv[])
 	if (!ParseCommandLineArgs(argc, argv, Arguments))
 		return 1;
 
-	
+
 	printf("\n================================================================================\n");
 	printf("                          IF SIGNAL GENERATION \n");
 	printf("================================================================================\n");
@@ -170,9 +181,10 @@ int main(int argc, char* argv[])
 		printf("[INFO]\tJSON file read successfully: %s\n", Arguments.ConfigFile.c_str());
 	}
 
-    Object = JsonTree.GetRootObject();
+	Object = JsonTree.GetRootObject();
 
 	AssignParameters(Object, &UtcTime, &StartPos, &StartVel, &Trajectory, &NavData, &OutputParam, &PowerControl, NULL);
+	CSatIfSignal::SetNavICL1SbocEnabled(OutputParam.NavICL1Sboc);
 
 	if (!Arguments.OutputFile.empty())
 	{
@@ -250,6 +262,8 @@ int main(int argc, char* argv[])
 		GloSatParam[i].CN0 = (int)(PowerControl.InitCN0 * 100 + 0.5);
 	for (i = 0; i < TOTAL_QZSS_SAT; i++)
 		QzssSatParam[i].CN0 = (int)(PowerControl.InitCN0 * 100 + 0.5);
+	for (i = 0; i < TOTAL_NAVIC_SAT; i++)
+		NavICSatParam[i].CN0 = (int)(PowerControl.InitCN0 * 100 + 0.5);
 	// create naviagtion bit instances
 	for (i = 0; i < sizeof(NavBitArray) / sizeof(NavBit*); i++)
 	{
@@ -268,6 +282,8 @@ int main(int argc, char* argv[])
 		case DataBitFNav:   NavBitArray[i] = new FNavBit; break;
 		case DataBitECNav:  NavBitArray[i] = (NavBit*)0; break;
 		case DataBitSbas:   NavBitArray[i] = (NavBit*)0; break;
+		case DataBitNavICL1Nav: NavBitArray[i] = new NavICL1NavBit; break;
+		case DataBitNavICLNav: NavBitArray[i] = new NavICLNavBit; break;
 		default:            NavBitArray[i] = (NavBit*)0; break;
 		}
 	}
@@ -331,6 +347,16 @@ int main(int argc, char* argv[])
 			OutputParam.FreqSelect[QzssSystem] &= ~(1 << SIGNAL_INDEX_L5);
 		OutputParam.FreqSelect[QzssSystem] &= ((1 << SIGNAL_INDEX_L1CA) | (1 << SIGNAL_INDEX_L1C) | (1 << SIGNAL_INDEX_L5));
 	}
+	if (OutputParam.FreqSelect[NavICSystem])
+	{
+		if ((OutputParam.FreqSelect[NavICSystem] & (1 << SIGNAL_INDEX_I1SD)) && (FREQ_NAVIC_L1 < FreqLow || FREQ_NAVIC_L1 > FreqHigh))
+			OutputParam.FreqSelect[NavICSystem] &= ~(1 << SIGNAL_INDEX_I1SD);
+		if ((OutputParam.FreqSelect[NavICSystem] & (1 << SIGNAL_INDEX_I1SP)) && (FREQ_NAVIC_L1 < FreqLow || FREQ_NAVIC_L1 > FreqHigh))
+			OutputParam.FreqSelect[NavICSystem] &= ~(1 << SIGNAL_INDEX_I1SP);
+		if ((OutputParam.FreqSelect[NavICSystem] & (1 << SIGNAL_INDEX_I5S)) && (FREQ_NAVIC_L5 < FreqLow || FREQ_NAVIC_L5 > FreqHigh))
+			OutputParam.FreqSelect[NavICSystem] &= ~(1 << SIGNAL_INDEX_I5S);
+		OutputParam.FreqSelect[NavICSystem] &= ((1 << SIGNAL_INDEX_I1SD) | (1 << SIGNAL_INDEX_I1SP) | (1 << SIGNAL_INDEX_I5S));
+	}
 
 	// set Ionosphere and UTC parameter for different navigation data bit
 	NavBitArray[DataBitLNav]->SetIonoUtc(NavData.GetGpsIono(), NavData.GetGpsUtcParam());
@@ -339,6 +365,8 @@ int main(int argc, char* argv[])
 	NavBitArray[DataBitD1D2]->SetIonoUtc(NavData.GetBdsIono(), NavData.GetBdsUtcParam());
 	NavBitArray[DataBitINav]->SetIonoUtc(NavData.GetGalileoIono(), NavData.GetGalileoUtcParam());
 	NavBitArray[DataBitFNav]->SetIonoUtc(NavData.GetGalileoIono(), NavData.GetGalileoUtcParam());
+	NavBitArray[DataBitNavICL1Nav]->SetIonoUtc(&NavICZeroIono, NavData.GetGpsUtcParam());
+	NavBitArray[DataBitNavICLNav]->SetIonoUtc(&NavICZeroIono, NavData.GetGpsUtcParam());
 	// Find ephemeris match current time and fill in data to generate bit stream
 	for (i = 1; i <= TOTAL_GPS_SAT; i ++)
 	{
@@ -373,8 +401,15 @@ int main(int argc, char* argv[])
 		NavBitArray[DataBitCNav]->SetEphemeris(193 + i, QzssEph[i]);
 		NavBitArray[DataBitCNav2]->SetEphemeris(193 + i, QzssEph[i]);
 	}
+	for (i = 1; i <= TOTAL_NAVIC_SAT; i++)
+	{
+		NavICEph[i - 1] = NavData.FindEphemeris(NavICSystem, CurTime, i);
+		NavBitArray[DataBitNavICL1Nav]->SetEphemeris(i, NavICEph[i - 1]);
+		NavBitArray[DataBitNavICLNav]->SetEphemeris(i, NavICEph[i - 1]);
+	}
 	NavData.CompleteAlmanac(BdsSystem, UtcTime);
 	NavData.CompleteAlmanac(GalileoSystem, UtcTime);
+	NavData.CompleteAlmanac(NavICSystem, UtcTime);
 	NavBitArray[DataBitLNav]->SetAlmanac(NavData.GetGpsAlmanac());
 	NavBitArray[DataBitCNav]->SetAlmanac(NavData.GetGpsAlmanac());
 	NavBitArray[DataBitCNav2]->SetAlmanac(NavData.GetGpsAlmanac());
@@ -385,6 +420,8 @@ int main(int argc, char* argv[])
 	NavBitArray[DataBitINav]->SetAlmanac(NavData.GetGalileoAlmanac());
 	NavBitArray[DataBitFNav]->SetAlmanac(NavData.GetGalileoAlmanac());
 	NavBitArray[DataBitGNav]->SetAlmanac((PGPS_ALMANAC)NavData.GetGlonassAlmanac());
+	NavBitArray[DataBitNavICL1Nav]->SetAlmanac(NavData.GetNavICAlmanac());
+	NavBitArray[DataBitNavICLNav]->SetAlmanac(NavData.GetNavICAlmanac());
 
 	// calculate visible satellite at start time and calculate satellite parameters
 	GpsSatNumber = (OutputParam.FreqSelect[GpsSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, GpsSystem, GpsEph, TOTAL_GPS_SAT, GpsEphVisible) : 0;
@@ -392,8 +429,10 @@ int main(int argc, char* argv[])
 	GalSatNumber = (OutputParam.FreqSelect[GalileoSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, GalileoSystem, GalEph, TOTAL_GAL_SAT, GalEphVisible) : 0;
 	GloSatNumber = (OutputParam.FreqSelect[GlonassSystem]) ? GetGlonassVisibleSatellite(CurPos, GlonassTime, OutputParam, GloEph, TOTAL_GLO_SAT, GloEphVisible) : 0;
 	QzssSatNumber = (OutputParam.FreqSelect[QzssSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, QzssSystem, QzssEph, TOTAL_QZSS_SAT, QzssEphVisible) : 0;
+	NavICSatNumber = (OutputParam.FreqSelect[NavICSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, NavICSystem, NavICEph, TOTAL_NAVIC_SAT, NavICEphVisible) : 0;
 
 	CIonoKlobuchar8 IonoModel(NavData.GetGpsIono());
+	CIonoKlobuchar8 NavICIonoModel(&NavICZeroIono);
 	for (i = 0; i < TOTAL_GPS_SAT; i ++)
 		GpsSatParam[i].Initialize(GpsSystem, GpsEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
 	for (i = 0; i < TOTAL_BDS_SAT; i ++)
@@ -404,6 +443,8 @@ int main(int argc, char* argv[])
 		GloSatParam[i].Initialize(GlonassSystem, (PGPS_EPHEMERIS)GloEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
 	for (i = 0; i < TOTAL_QZSS_SAT; i ++)
 		QzssSatParam[i].Initialize(QzssSystem, QzssEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
+	for (i = 0; i < TOTAL_NAVIC_SAT; i ++)
+		NavICSatParam[i].Initialize(NavICSystem, NavICEph[i], &NavICIonoModel, PowerControl.InitCN0, PowerControl.Adjust);
 
 	ListCount = PowerControl.GetPowerControlList(0, PowerList);
 	UpdateSatParamList(CurTime, CurPos, ListCount, PowerList, NavData.GetGpsIono());
@@ -412,7 +453,7 @@ int main(int argc, char* argv[])
 	memset(SatIfSignal, 0, sizeof(SatIfSignal));
 	TotalChannelNumber = 0;
 	printf("[INFO]\tGenerating IF data with following satellite signals:\n\n");
-	
+
 	// Enhanced signal display with cleaner formatting
 	printf("[INFO]\tEnabled Signals:\n");
 
@@ -426,7 +467,7 @@ int main(int argc, char* argv[])
 		if (OutputParam.FreqSelect[GpsSystem] & (1 << SIGNAL_INDEX_L5)) printf("L5 ");
 		printf("]\n");
 	}
-	
+
 	// BDS signals
 	if (OutputParam.FreqSelect[BdsSystem]) {
 		printf("\tBDS : [ ");
@@ -438,7 +479,7 @@ int main(int argc, char* argv[])
 		if (OutputParam.FreqSelect[BdsSystem] & (1 << SIGNAL_INDEX_B3I)) printf("B3I ");
 		printf("]\n");
 	}
-	
+
 	// Galileo signals
 	if (OutputParam.FreqSelect[GalileoSystem]) {
 		printf("\tGAL : [ ");
@@ -448,7 +489,7 @@ int main(int argc, char* argv[])
 		if (OutputParam.FreqSelect[GalileoSystem] & (1 << SIGNAL_INDEX_E6)) printf("E6 ");
 		printf("]\n");
 	}
-	
+
 	// GLONASS signals
 	if (OutputParam.FreqSelect[GlonassSystem]) {
 		printf("\tGLO : [ ");
@@ -463,9 +504,16 @@ int main(int argc, char* argv[])
 		if (OutputParam.FreqSelect[QzssSystem] & (1 << SIGNAL_INDEX_L5)) printf("L5 ");
 		printf("]\n");
 	}
+	if (OutputParam.FreqSelect[NavICSystem]) {
+		printf("\tNavIC: [ ");
+		if (OutputParam.FreqSelect[NavICSystem] & (1 << SIGNAL_INDEX_I1SD)) printf("I1SD ");
+		if (OutputParam.FreqSelect[NavICSystem] & (1 << SIGNAL_INDEX_I1SP)) printf("I1SP ");
+		if (OutputParam.FreqSelect[NavICSystem] & (1 << SIGNAL_INDEX_I5S)) printf("I5S ");
+		printf("]\n");
+	}
 	printf("\n");
 	// Count total signals per system
-	int GpsSignalCount = 0, BdsSignalCount = 0, GalSignalCount = 0, GloSignalCount = 0, QzssSignalCount = 0;
+	int GpsSignalCount = 0, BdsSignalCount = 0, GalSignalCount = 0, GloSignalCount = 0, QzssSignalCount = 0, NavICSignalCount = 0;
 	for (SignalIndex = SIGNAL_INDEX_L1CA; SignalIndex <= SIGNAL_INDEX_L5; SignalIndex++)
 		if (OutputParam.FreqSelect[GpsSystem] & (1 << SignalIndex)) GpsSignalCount++;
 	for (SignalIndex = SIGNAL_INDEX_B1C; SignalIndex <= SIGNAL_INDEX_B2b; SignalIndex++)
@@ -476,11 +524,14 @@ int main(int argc, char* argv[])
 		if (OutputParam.FreqSelect[GlonassSystem] & (1 << SignalIndex)) GloSignalCount++;
 	for (SignalIndex = SIGNAL_INDEX_L1CA; SignalIndex <= SIGNAL_INDEX_L5; SignalIndex++)
 		if (OutputParam.FreqSelect[QzssSystem] & (1 << SignalIndex)) QzssSignalCount++;
+	for (SignalIndex = SIGNAL_INDEX_I1SD; SignalIndex <= SIGNAL_INDEX_I5S; SignalIndex++)
+		if (OutputParam.FreqSelect[NavICSystem] & (1 << SignalIndex)) NavICSignalCount++;
 	int QzssChannelCount = CountHealthyQzssChannels(OutputParam.FreqSelect[QzssSystem]);
+	int NavICChannelCount = CountNavICChannels(OutputParam.FreqSelect[NavICSystem]);
 
 
 	printf("Signals Summary Table:\n");
-	
+
 	// Enhanced constellation summary table
 	printf("+---------------+-------------+--------------+------------------------------+\n");
 	printf("| Constellation | Visible SVs | Signals / SV | Total Signals / Visible SVs  |\n");
@@ -490,10 +541,11 @@ int main(int argc, char* argv[])
 	printf("| Galileo       | %-11d | %-12d | %-28d |\n", GalSatNumber, GalSignalCount, GalSatNumber * GalSignalCount);
 	printf("| GLONASS       | %-11d | %-12d | %-28d |\n", GloSatNumber, GloSignalCount, GloSatNumber * GloSignalCount);
 	printf("| QZSS          | %-11d | %-12d | %-28d |\n", QzssSatNumber, QzssSignalCount, QzssChannelCount);
+	printf("| NavIC         | %-11d | %-12d | %-28d |\n", NavICSatNumber, NavICSignalCount, NavICChannelCount);
 	printf("+---------------+-------------+--------------+------------------------------+\n");
-	
-	int TotalVisibleSVs = GpsSatNumber + BdsSatNumber + GalSatNumber + GloSatNumber + QzssSatNumber;
-	int TotalChannels = GpsSatNumber * GpsSignalCount + BdsSatNumber * BdsSignalCount + GalSatNumber * GalSignalCount + GloSatNumber * GloSignalCount + QzssChannelCount;
+
+	int TotalVisibleSVs = GpsSatNumber + BdsSatNumber + GalSatNumber + GloSatNumber + QzssSatNumber + NavICSatNumber;
+	int TotalChannels = GpsSatNumber * GpsSignalCount + BdsSatNumber * BdsSignalCount + GalSatNumber * GalSignalCount + GloSatNumber * GloSignalCount + QzssChannelCount + NavICChannelCount;
 	printf("Total Visible SVs = %d, Total channels = %d\n\n", TotalVisibleSVs, TotalChannels);
 
 	// Detailed satellite and signal information in compact table format
@@ -517,7 +569,7 @@ int main(int argc, char* argv[])
 				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &GpsSatParam[GpsEphVisible[i]->svid-1], GetNavData(GpsSystem, SignalIndex, NavBitArray));
 			}
 			TotalChannelNumber++;
-			
+
 			if (svCount % 4 == 0) printf("|");
 			printf(" %02d | %+12d |", GpsEphVisible[i]->svid, (int)GpsSatParam[GpsEphVisible[i]->svid-1].GetDoppler(SignalIndex));
 			svCount++;
@@ -557,7 +609,7 @@ int main(int argc, char* argv[])
 				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &QzssSatParam[QzssIndex], GetNavData(QzssSystem, SignalIndex, NavBitArray));
 			}
 			TotalChannelNumber++;
-			
+
 			if (svCount % 4 == 0) printf("|");
 			printf(" %03d | %+12d |", QzssEphVisible[i]->svid, (int)QzssSatParam[QzssIndex].GetDoppler(SignalIndex));
 			svCount++;
@@ -570,7 +622,44 @@ int main(int argc, char* argv[])
 		if (svCount > 0 && (svCount-1) % 4 == 3) printf("\n");
 		printf("+-----+--------------+-----+--------------+-----+--------------+-----+--------------+\n\n");
 	}
-	
+
+	for (SignalIndex = SIGNAL_INDEX_I1SD; SignalIndex <= SIGNAL_INDEX_I5S; SignalIndex++)
+	{
+		if (!(OutputParam.FreqSelect[NavICSystem] & (1 << SignalIndex)))
+			continue;
+		IfFreq = SignalCenterFreq[NavICSystem][SignalIndex] - OutputParam.CenterFreq * 1000;
+		printf("NavIC %s with IF %+dkHz:\n", SignalName[NavICSystem][SignalIndex], IfFreq / 1000);
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		printf("| SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) |\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+		int svCount = 0;
+		for (i = 0; i < NavICSatNumber; i++)
+		{
+			if (TotalChannelNumber >= TOTAL_SAT_CHANNEL)
+				break;
+			int NavICIndex = NavICEphVisible[i]->svid - 1;
+			if (NavICIndex < 0 || NavICIndex >= TOTAL_NAVIC_SAT)
+				continue;
+			if (!Arguments.ValidateOnly)
+			{
+				SatIfSignal[TotalChannelNumber] = new CSatIfSignal(OutputParam.SampleFreq, IfFreq, NavICSystem, SignalIndex, NavICEphVisible[i]->svid);
+				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &NavICSatParam[NavICIndex], GetNavData(NavICSystem, SignalIndex, NavBitArray));
+			}
+			TotalChannelNumber++;
+
+			if (svCount % 4 == 0) printf("|");
+			printf(" %02d | %+12d |", NavICEphVisible[i]->svid, (int)NavICSatParam[NavICIndex].GetDoppler(SignalIndex));
+			svCount++;
+			if (svCount % 4 == 0) printf("\n");
+		}
+		while (svCount % 4 != 0) {
+			printf("    |              |");
+			svCount++;
+		}
+		if (svCount > 0 && (svCount-1) % 4 == 3) printf("\n");
+		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
+	}
+
 	for (SignalIndex = SIGNAL_INDEX_B1C; SignalIndex <= SIGNAL_INDEX_B2b; SignalIndex++)
 	{
 		if (!(OutputParam.FreqSelect[BdsSystem] & (1 << SignalIndex)))
@@ -592,7 +681,7 @@ int main(int argc, char* argv[])
 				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &BdsSatParam[BdsEphVisible[i]->svid - 1], GetNavData(BdsSystem, SignalIndex, NavBitArray));
 			}
 			TotalChannelNumber++;
-			
+
 			if (svCount % 4 == 0) printf("|");
 			printf(" %02d | %+12d |", BdsEphVisible[i]->svid, (int)BdsSatParam[BdsEphVisible[i]->svid-1].GetDoppler(SignalIndex));
 			svCount++;
@@ -605,7 +694,7 @@ int main(int argc, char* argv[])
 		if (svCount > 0 && (svCount-1) % 4 == 3) printf("\n");
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
 	}
-	
+
 	for (SignalIndex = SIGNAL_INDEX_E1; SignalIndex <= SIGNAL_INDEX_E6; SignalIndex++)
 	{
 		if (!(OutputParam.FreqSelect[GalileoSystem] & (1 << SignalIndex)))
@@ -615,7 +704,7 @@ int main(int argc, char* argv[])
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
 		printf("| SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) |\n");
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
-		
+
 		int svCount = 0;
 		for (i = 0; i < GalSatNumber; i++)
 		{
@@ -627,7 +716,7 @@ int main(int argc, char* argv[])
 				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &GalSatParam[GalEphVisible[i]->svid - 1], GetNavData(GalileoSystem, SignalIndex, NavBitArray));
 			}
 			TotalChannelNumber++;
-			
+
 			if (svCount % 4 == 0) printf("|");
 			printf(" %02d | %+12d |", GalEphVisible[i]->svid, (int)GalSatParam[GalEphVisible[i]->svid-1].GetDoppler(SignalIndex));
 			svCount++;
@@ -640,7 +729,7 @@ int main(int argc, char* argv[])
 		if (svCount > 0 && (svCount-1) % 4 == 3) printf("\n");
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
 	}
-	
+
 	for (SignalIndex = SIGNAL_INDEX_G1; SignalIndex <= SIGNAL_INDEX_G2; SignalIndex++)
 	{
 		if (!(OutputParam.FreqSelect[GlonassSystem] & (1 << SignalIndex)))
@@ -663,7 +752,7 @@ int main(int argc, char* argv[])
 				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &GloSatParam[GloEphVisible[i]->n - 1], GetNavData(GlonassSystem, SignalIndex, NavBitArray));
 			}
 			TotalChannelNumber++;
-			
+
 			if (svCount % 4 == 0) printf("|");
 			printf(" %02d | %+12d |", GloEphVisible[i]->n, (int)GloSatParam[GloEphVisible[i]->n-1].GetDoppler(SignalIndex));
 			svCount++;
@@ -705,16 +794,16 @@ int main(int argc, char* argv[])
 	double AGCGain = 1.0;
 	printf("[INFO]\tStarting signal generation loop...\n");
 	fflush(stdout);
-	
+
 	auto start_time = std::chrono::high_resolution_clock::now();
-	
+
 	while (!StepToNextMs())
 	{
 		exec_cycle ++;
 		// generate white noise
 		for (i = 0; i < OutputParam.SampleFreq; i ++)
 			NoiseArray[i] = GenerateNoise(1.0);
-		
+
 		// Use parallel or serial processing based on command line flag
 		if (Arguments.MultiThread)
 		{
@@ -728,7 +817,7 @@ int main(int argc, char* argv[])
 			// OpenMP not available, fall back to sequential processing
 			for (i = 0; i < TotalChannelNumber; i++)
 				SatIfSignal[i]->GetIfSample(CurTime);
-			
+
 			#endif
 		}
 		else
@@ -746,19 +835,19 @@ int main(int argc, char* argv[])
 				NoiseArray[j] += SatIfSignal[i]->SampleArray[j];
 		}
 
-		
-		if (OutputParam.Format == OutputFormatIQ2) 
+
+		if (OutputParam.Format == OutputFormatIQ2)
 		{
 			TotalClippedSamples += QuantSamplesIQ2(NoiseArray, OutputParam.SampleFreq, QuantArray, AGCGain);
 			// Pack 2 samples per byte
 			fwrite(QuantArray, sizeof(unsigned char), OutputParam.SampleFreq / 2, IfFile);	// 1/2 byte/sample
 		}
-		else if (OutputParam.Format == OutputFormatIQ4) 
+		else if (OutputParam.Format == OutputFormatIQ4)
 		{
 			TotalClippedSamples += QuantSamplesIQ4(NoiseArray, OutputParam.SampleFreq, QuantArray, AGCGain);
 			fwrite(QuantArray, sizeof(unsigned char), OutputParam.SampleFreq, IfFile); // 1 byte/sample
 		}
-		else if (OutputParam.Format == OutputFormatIQ16) 
+		else if (OutputParam.Format == OutputFormatIQ16)
 		{
 			TotalClippedSamples += QuantSamplesIQ16(NoiseArray, OutputParam.SampleFreq, QuantArray, AGCGain);
 			fwrite(QuantArray, sizeof(unsigned char) * 4, OutputParam.SampleFreq, IfFile); // 4 bytes/sample
@@ -798,17 +887,17 @@ int main(int argc, char* argv[])
 		{
 			auto current_time = std::chrono::high_resolution_clock::now();
 			auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
-			
+
 			double percentage = (double)exec_cycle / totalDurationMs * 100.0;
 			double currentMB = (exec_cycle * bytesPerMs) / (1024.0 * 1024.0);
 			double mbPerSec = (elapsed > 0) ? (currentMB * 1000.0) / elapsed : 0.0;
-			
+
 			// Calculate estimated time remaining
 			long etaMs = 0;
 			if (percentage > 0 && elapsed > 0) {
 				etaMs = (long)((elapsed * (100.0 - percentage)) / percentage);
 			}
-			
+
 			// Progress bar with percentage in center
 			int barWidth = 50;
 			int progress = (int)(percentage * barWidth / 100.0);
@@ -816,7 +905,7 @@ int main(int argc, char* argv[])
 			sprintf(progressStr, "%.1f%%", percentage);
 			int progressStrLen = strlen(progressStr);
 			int centerPos = (barWidth - progressStrLen) / 2;
-			
+
 			printf("\r[");
 			for (int k = 0; k < barWidth; k++) {
 				if (k >= centerPos && k < centerPos + progressStrLen) {
@@ -831,7 +920,7 @@ int main(int argc, char* argv[])
 					printf(" ");
 				}
 			}
-			
+
 			// Format ETA
 			char etaStr[32];
 			if (etaMs > 0) {
@@ -846,14 +935,14 @@ int main(int argc, char* argv[])
 			} else {
 				strcpy(etaStr, "ETA: --   ");
 			}
-			
+
 			printf("] %d/%d ms | %.2f/%.2f MB @ %.2f MB/s | %s",
 				   exec_cycle, totalDurationMs, currentMB, totalMB, mbPerSec, etaStr);
 			fflush(stdout);
 		}
 //		if (length == 2) break;
 	}
-	
+
 	// Final progress bar update to ensure 100% is shown
 	printf("\r[");
 	for (int k = 0; k < 50; k++) {
@@ -864,8 +953,8 @@ int main(int argc, char* argv[])
 		}
 	}
 	printf("] %d/%d ms | %.2f/%.2f MB | \tCOMPLETED\n",
-		   totalDurationMs, totalDurationMs, totalMB, totalMB); 
-	
+		   totalDurationMs, totalDurationMs, totalMB, totalMB);
+
 	auto end_time = std::chrono::high_resolution_clock::now();
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 	double finalMB = (exec_cycle * bytesPerMs) / (1024.0 * 1024.0);
@@ -901,7 +990,7 @@ struct Ls3wPathConfig
 	int CenterHz = 0;
 	int BandwidthHz = 0;
 	int SampleFreq = 0;	// Samples per millisecond.
-	unsigned int FreqSelect[5] = {0, 0, 0, 0, 0};
+	unsigned int FreqSelect[GNSS_SYSTEM_NUMBER] = {0};
 };
 
 struct Ls3wPathRuntime
@@ -910,7 +999,7 @@ struct Ls3wPathRuntime
 	std::vector<CSatIfSignal*> Signals;
 	std::vector<complex_number> Samples;
 	unsigned int NoiseSeed = 1;
-	int SignalCount[5] = {0, 0, 0, 0, 0};
+	int SignalCount[GNSS_SYSTEM_NUMBER] = {0};
 };
 
 struct SatelliteBudgetRow
@@ -972,6 +1061,8 @@ static int ParseSystemName(const char *Name)
 		return GlonassSystem;
 	if (strcmp(Name, "QZSS") == 0 || strcmp(Name, "QZS") == 0)
 		return QzssSystem;
+	if (strcmp(Name, "NavIC") == 0 || strcmp(Name, "NAVIC") == 0 || strcmp(Name, "IRNSS") == 0)
+		return NavICSystem;
 	return -1;
 }
 
@@ -985,6 +1076,7 @@ static int ParseSignalName(int System, const char *Name)
 	case GalileoSystem: MaxSignal = SIGNAL_INDEX_E6; break;
 	case GlonassSystem: MaxSignal = SIGNAL_INDEX_G2; break;
 	case QzssSystem: MaxSignal = SIGNAL_INDEX_L5; break;
+	case NavICSystem: MaxSignal = SIGNAL_INDEX_I5S; break;
 	default: return -1;
 	}
 	for (int i = 0; i <= MaxSignal; ++i)
@@ -1005,7 +1097,7 @@ static void ParseLs3wSystemSelect(JsonObject *SelectArray, Ls3wPathConfig &Chann
 		if (!SystemObject || SystemObject->Type != JsonObject::ValueTypeString)
 			continue;
 		int System = ParseSystemName(SystemObject->String);
-		if (System < 0 || System > QzssSystem)
+		if (System < 0 || System > NavICSystem || System == SbasSystem)
 			continue;
 		int Signal = 0;
 		if (SignalObject && SignalObject->Type == JsonObject::ValueTypeString)
@@ -1013,6 +1105,8 @@ static void ParseLs3wSystemSelect(JsonObject *SelectArray, Ls3wPathConfig &Chann
 		if (Signal < 0)
 			continue;
 		if (System == QzssSystem && Signal != SIGNAL_INDEX_L1CA && Signal != SIGNAL_INDEX_L1C && Signal != SIGNAL_INDEX_L5)
+			continue;
+		if (System == NavICSystem && Signal != SIGNAL_INDEX_I1SD && Signal != SIGNAL_INDEX_I1SP && Signal != SIGNAL_INDEX_I5S)
 			continue;
 		bool Enable = !EnableObject || EnableObject->Type == JsonObject::ValueTypeTrue;
 		if (Enable)
@@ -1168,6 +1262,7 @@ static const char *Ls3wSystemIniName(int System)
 	case GalileoSystem: return "Galileo";
 	case GlonassSystem: return "GLONASS";
 	case QzssSystem: return "QZSS";
+	case NavICSystem: return "NavIC";
 	default: return "";
 	}
 }
@@ -1193,7 +1288,7 @@ static std::string JoinSignals(const std::vector<std::string> &Signals, const ch
 static std::vector<std::string> CollectLs3wSignals(const Ls3wPathConfig &Path, int System, bool WithSystemPrefix)
 {
 	std::vector<std::string> Signals;
-	if (System < GpsSystem || System > QzssSystem)
+	if (System < GpsSystem || System > NavICSystem || System == SbasSystem)
 		return Signals;
 
 	for (int sig = 0; sig < 8; ++sig)
@@ -1215,8 +1310,10 @@ static std::vector<std::string> CollectLs3wSignals(const Ls3wPathConfig &Path, i
 static std::string BuildLs3wPathSignalList(const Ls3wPathConfig &Path)
 {
 	std::vector<std::string> Signals;
-	for (int sys = GpsSystem; sys <= QzssSystem; ++sys)
+	for (int sys = GpsSystem; sys <= NavICSystem; ++sys)
 	{
+		if (sys == SbasSystem)
+			continue;
 		std::vector<std::string> SystemSignals = CollectLs3wSignals(Path, sys, true);
 		for (size_t i = 0; i < SystemSignals.size(); ++i)
 			AddUniqueSignal(Signals, SystemSignals[i]);
@@ -1323,6 +1420,7 @@ static const char *BudgetSystemName(int System)
 	case GalileoSystem: return "GAL";
 	case GlonassSystem: return "GLO";
 	case QzssSystem: return "QZSS";
+	case NavICSystem: return "NAVIC";
 	default: return "UNK";
 	}
 }
@@ -1453,8 +1551,10 @@ static std::string BuildLs3wSignalList(const std::vector<Ls3wPathConfig> &Paths)
 	std::vector<std::string> Signals;
 	for (size_t path = 0; path < Paths.size(); ++path)
 	{
-		for (int sys = GpsSystem; sys <= QzssSystem; ++sys)
+		for (int sys = GpsSystem; sys <= NavICSystem; ++sys)
 		{
+			if (sys == SbasSystem)
+				continue;
 			std::vector<std::string> SystemSignals = CollectLs3wSignals(Paths[path], sys, true);
 			for (size_t i = 0; i < SystemSignals.size(); ++i)
 				AddUniqueSignal(Signals, SystemSignals[i]);
@@ -1472,6 +1572,7 @@ static const char *WaveSystemDisplayName(int System)
 	case GalileoSystem: return "Galileo";
 	case GlonassSystem: return "GLONASS";
 	case QzssSystem: return "QZSS";
+	case NavICSystem: return "NavIC";
 	default: return "";
 	}
 }
@@ -1488,8 +1589,10 @@ static const char *WaveSignalDisplayName(int System, int SignalIndex)
 static std::string BuildWaveSignalList(const std::vector<Ls3wPathConfig> &Paths)
 {
 	std::vector<std::string> SystemTexts;
-	for (int sys = GpsSystem; sys <= QzssSystem; ++sys)
+	for (int sys = GpsSystem; sys <= NavICSystem; ++sys)
 	{
+		if (sys == SbasSystem)
+			continue;
 		std::vector<std::string> Signals;
 		for (size_t path = 0; path < Paths.size(); ++path)
 		{
@@ -1562,6 +1665,7 @@ static bool WriteLs3wIni(const char *OutputFileName, const std::vector<Ls3wPathC
 	fprintf(File, "Galileo=%s\n", BuildLs3wSystemSummary(Paths, GalileoSystem).c_str());
 	fprintf(File, "GLONASS=%s\n", BuildLs3wSystemSummary(Paths, GlonassSystem).c_str());
 	fprintf(File, "QZSS=%s\n", BuildLs3wSystemSummary(Paths, QzssSystem).c_str());
+	fprintf(File, "NavIC=%s\n", BuildLs3wSystemSummary(Paths, NavICSystem).c_str());
 	fclose(File);
 	printf("[INFO]\tIni file created: %s\n", IniFileName.c_str());
 	return true;
@@ -1982,7 +2086,7 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 		for (int sys = 0; sys <= QzssSystem; ++sys)
 			OutputParam.FreqSelect[sys] |= Ls3wPathConfigs[ch].FreqSelect[sys];
 
-	NavBit *NavBitArray[12];
+	NavBit *NavBitArray[DataBitCount];
 	for (int i = 0; i < (int)(sizeof(NavBitArray) / sizeof(NavBitArray[0])); ++i)
 	{
 		switch (i)
@@ -1997,6 +2101,8 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 		case DataBitBCNav3: NavBitArray[i] = new BCNav3Bit; break;
 		case DataBitINav:   NavBitArray[i] = new INavBit; break;
 		case DataBitFNav:   NavBitArray[i] = new FNavBit; break;
+		case DataBitNavICL1Nav: NavBitArray[i] = new NavICL1NavBit; break;
+		case DataBitNavICLNav: NavBitArray[i] = new NavICLNavBit; break;
 		default:            NavBitArray[i] = (NavBit*)0; break;
 		}
 	}
@@ -2025,6 +2131,8 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 	NavBitArray[DataBitD1D2]->SetIonoUtc(NavData.GetBdsIono(), NavData.GetBdsUtcParam());
 	NavBitArray[DataBitINav]->SetIonoUtc(NavData.GetGalileoIono(), NavData.GetGalileoUtcParam());
 	NavBitArray[DataBitFNav]->SetIonoUtc(NavData.GetGalileoIono(), NavData.GetGalileoUtcParam());
+	NavBitArray[DataBitNavICL1Nav]->SetIonoUtc(&NavICZeroIono, NavData.GetGpsUtcParam());
+	NavBitArray[DataBitNavICLNav]->SetIonoUtc(&NavICZeroIono, NavData.GetGpsUtcParam());
 
 	for (int i = 1; i <= TOTAL_GPS_SAT; ++i)
 	{
@@ -2059,8 +2167,15 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 		NavBitArray[DataBitCNav]->SetEphemeris(193 + i, QzssEph[i]);
 		NavBitArray[DataBitCNav2]->SetEphemeris(193 + i, QzssEph[i]);
 	}
+	for (int i = 1; i <= TOTAL_NAVIC_SAT; ++i)
+	{
+		NavICEph[i - 1] = NavData.FindEphemeris(NavICSystem, CurTime, i);
+		NavBitArray[DataBitNavICL1Nav]->SetEphemeris(i, NavICEph[i - 1]);
+		NavBitArray[DataBitNavICLNav]->SetEphemeris(i, NavICEph[i - 1]);
+	}
 	NavData.CompleteAlmanac(BdsSystem, UtcTime);
 	NavData.CompleteAlmanac(GalileoSystem, UtcTime);
+	NavData.CompleteAlmanac(NavICSystem, UtcTime);
 	NavBitArray[DataBitLNav]->SetAlmanac(NavData.GetGpsAlmanac());
 	NavBitArray[DataBitCNav]->SetAlmanac(NavData.GetGpsAlmanac());
 	NavBitArray[DataBitCNav2]->SetAlmanac(NavData.GetGpsAlmanac());
@@ -2071,6 +2186,8 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 	NavBitArray[DataBitINav]->SetAlmanac(NavData.GetGalileoAlmanac());
 	NavBitArray[DataBitFNav]->SetAlmanac(NavData.GetGalileoAlmanac());
 	NavBitArray[DataBitGNav]->SetAlmanac((PGPS_ALMANAC)NavData.GetGlonassAlmanac());
+	NavBitArray[DataBitNavICL1Nav]->SetAlmanac(NavData.GetNavICAlmanac());
+	NavBitArray[DataBitNavICLNav]->SetAlmanac(NavData.GetNavICAlmanac());
 
 	GpsSatNumber = (OutputParam.FreqSelect[GpsSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, GpsSystem, GpsEph, TOTAL_GPS_SAT, GpsEphVisible) : 0;
 	BdsSatNumber = (OutputParam.FreqSelect[BdsSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, BdsSystem, BdsEph, TOTAL_BDS_SAT, BdsEphVisible) : 0;
@@ -2079,6 +2196,7 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 	QzssSatNumber = (OutputParam.FreqSelect[QzssSystem]) ? GetVisibleSatellite(CurPos, CurTime, OutputParam, QzssSystem, QzssEph, TOTAL_QZSS_SAT, QzssEphVisible) : 0;
 
 	CIonoKlobuchar8 IonoModel(NavData.GetGpsIono());
+	CIonoKlobuchar8 NavICIonoModel(&NavICZeroIono);
 	for (int i = 0; i < TOTAL_GPS_SAT; ++i)
 		GpsSatParam[i].Initialize(GpsSystem, GpsEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
 	for (int i = 0; i < TOTAL_BDS_SAT; ++i)
@@ -2089,6 +2207,8 @@ int RunLs3wOutput(JsonObject *RootObject, const CommandArguments &Arguments,
 		GloSatParam[i].Initialize(GlonassSystem, (PGPS_EPHEMERIS)GloEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
 	for (int i = 0; i < TOTAL_QZSS_SAT; ++i)
 		QzssSatParam[i].Initialize(QzssSystem, QzssEph[i], &IonoModel, PowerControl.InitCN0, PowerControl.Adjust);
+	for (int i = 0; i < TOTAL_NAVIC_SAT; ++i)
+		NavICSatParam[i].Initialize(NavICSystem, NavICEph[i], &NavICIonoModel, PowerControl.InitCN0, PowerControl.Adjust);
 
 	PSIGNAL_POWER PowerList = NULL;
 	int ListCount = PowerControl.GetPowerControlList(0, PowerList);
@@ -2520,6 +2640,14 @@ void UpdateSatParamList(GNSS_TIME CurTime, KINEMATIC_INFO CurPos, int ListCount,
 		QzssSatParam[index].CalculateParam(CurPos, PosLLA, CurTime);
 		QzssSatParam[index].UpdateCN0(ListCount, PowerList);
 	}
+	for (i = 0; i < NavICSatNumber; i++)
+	{
+		index = NavICEphVisible[i]->svid - 1;
+		if (index < 0 || index >= TOTAL_NAVIC_SAT)
+			continue;
+		NavICSatParam[index].CalculateParam(CurPos, PosLLA, CurTime);
+		NavICSatParam[index].UpdateCN0(ListCount, PowerList);
+	}
 }
 
 int StepToNextMs()
@@ -2586,6 +2714,10 @@ complex_number GenerateNoise(unsigned int &Seed, double Sigma)
 
 NavBit* GetNavData(GnssSystem SatSystem, int SatSignalIndex, NavBit* NavBitArray[])
 {
+	if ((SatSystem >= 0 && SatSystem < GNSS_SYSTEM_NUMBER) &&
+		(OutputParam.NavDataDisableMask[SatSystem] & (1U << SatSignalIndex)))
+		return (NavBit*)0;
+
 	switch (SatSystem)
 	{
 	case GpsSystem:
@@ -2638,6 +2770,14 @@ NavBit* GetNavData(GnssSystem SatSystem, int SatSignalIndex, NavBit* NavBitArray
 		case SIGNAL_INDEX_L5:   return NavBitArray[DataBitCNav];
 		default: return NavBitArray[DataBitLNav];
 		}
+	case NavICSystem:
+		switch (SatSignalIndex)
+		{
+		case SIGNAL_INDEX_I1SD: return NavBitArray[DataBitNavICL1Nav];
+		case SIGNAL_INDEX_I1SP: return NavBitArray[DataBitNavICL1Nav];
+		case SIGNAL_INDEX_I5S: return NavBitArray[DataBitNavICLNav];
+		default: return (NavBit*)0;
+		}
 	default: return NavBitArray[DataBitLNav];
 	}
 }
@@ -2647,6 +2787,8 @@ static bool IsSignalHealthy(GnssSystem System, int SignalIndex, PGPS_EPHEMERIS E
 	if (Eph == NULL || Eph->valid == 0)
 		return false;
 
+	if (System == NavICSystem)
+		return true;
 	if (System != QzssSystem)
 		return Eph->health == 0;
 
@@ -2680,7 +2822,16 @@ static int CountHealthyQzssChannels(unsigned int FreqSelect)
 	return Count;
 }
 
-// PocketSDR compatible 2-bit IQ quantization 
+static int CountNavICChannels(unsigned int FreqSelect)
+{
+	int SignalCount = 0;
+	for (int SignalIndex = SIGNAL_INDEX_I1SD; SignalIndex <= SIGNAL_INDEX_I5S; ++SignalIndex)
+		if (FreqSelect & (1U << SignalIndex))
+			SignalCount++;
+	return NavICSatNumber * SignalCount;
+}
+
+// PocketSDR compatible 2-bit IQ quantization
 // (TODO: Test)
 // (FIXME: Optimize)
  int QuantSamplesIQ2(complex_number Samples[], int Length, unsigned char QuantSamples[], double GainScale)
@@ -2793,14 +2944,14 @@ int QuantSamplesIQ16(complex_number Samples[], int Length, unsigned char QuantSa
 {
     int i;
     int QuantValue;
-    
+
     const double Gain = GainScale * 3277;
     int ClippedCount = 0;
 
     for (i = 0; i < Length; i++)
     {
-        QuantValue = (int)(Samples[i].real * Gain);  
-        if (QuantValue > 32767)  
+        QuantValue = (int)(Samples[i].real * Gain);
+        if (QuantValue > 32767)
         {
             QuantValue = 32767;
             ClippedCount++;
@@ -2810,13 +2961,13 @@ int QuantSamplesIQ16(complex_number Samples[], int Length, unsigned char QuantSa
             QuantValue = -32768;
             ClippedCount++;
         }
-    
-        QuantSamples[i * 4] = (unsigned char)(QuantValue & 0xff);       
-        QuantSamples[i * 4 + 1] = (unsigned char)((QuantValue >> 8) & 0xff);  
 
-      
-        QuantValue = (int)(Samples[i].imag * Gain);  
-        if (QuantValue > 32767)  
+        QuantSamples[i * 4] = (unsigned char)(QuantValue & 0xff);
+        QuantSamples[i * 4 + 1] = (unsigned char)((QuantValue >> 8) & 0xff);
+
+
+        QuantValue = (int)(Samples[i].imag * Gain);
+        if (QuantValue > 32767)
         {
             QuantValue = 32767;
             ClippedCount++;
@@ -2826,9 +2977,9 @@ int QuantSamplesIQ16(complex_number Samples[], int Length, unsigned char QuantSa
             QuantValue = -32768;
             ClippedCount++;
         }
-      
-        QuantSamples[i * 4 + 2] = (unsigned char)(QuantValue & 0xff);        
-        QuantSamples[i * 4 + 3] = (unsigned char)((QuantValue >> 8) & 0xff);  
+
+        QuantSamples[i * 4 + 2] = (unsigned char)(QuantValue & 0xff);
+        QuantSamples[i * 4 + 3] = (unsigned char)((QuantValue >> 8) & 0xff);
     }
 
     return ClippedCount;
@@ -2844,7 +2995,7 @@ void ShowHelp(const char* ProgramPath)
 		ProgramName = PathName;
 	else
 		ProgramName = PathName.substr(pos + 1);
-	
+
 	std::cout << "IFDataGen - GNSS IF Data Generator\n\n";
 	std::cout << "Usage: " << ProgramName << " [options]\n\n";
 	std::cout << "Available options:\n";
@@ -2934,7 +3085,7 @@ void CreateTagFile(const std::string& tagFilePath, const OUTPUT_PARAM& outputPar
 {
     printf("[INFO]\tCreating tag file: %s\n", tagFilePath.c_str());
     FILE* tagFile = fopen(tagFilePath.c_str(), "w");
-    
+
     if (!tagFile) {
         std::cerr << "[WARNING]\tCould not create tag file: " << tagFilePath << std::endl;
         return;
@@ -2944,9 +3095,9 @@ void CreateTagFile(const std::string& tagFilePath, const OUTPUT_PARAM& outputPar
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
-    
+
     struct tm* timeinfo = gmtime(&time_t);  // Use gmtime() instead of localtime()
-    
+
     // Determine format strings
     const char* formatStr;
     const char* iqStr;
@@ -2963,10 +3114,10 @@ void CreateTagFile(const std::string& tagFilePath, const OUTPUT_PARAM& outputPar
     }else if (outputParam.Format == OutputFormatIQ16){
 	formatStr = "INT16X2";
         iqStr = "1";
-        bitsStr = "16"; 
+        bitsStr = "16";
     }else { // OutputFormatIQ8
-        formatStr = "INT8X2";
-        iqStr = "1";
+        formatStr = "CS8";
+        iqStr = "2";
         bitsStr = "8";
     }
 

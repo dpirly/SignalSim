@@ -265,6 +265,7 @@ BOOL SetOutputParam(CXmlElement *Element, OUTPUT_PARAM &OutputParam)
 	OutputParam.BdsMaskOut = OutputParam.GalileoMaskOut = 0LL;
 	OutputParam.ElevationMask = DEG2RAD(5);
 	OutputParam.Interval = 1000;
+	OutputParam.NavICL1Sboc = FALSE;
 	// default output GPS L1 only
 	OutputParam.FreqSelect[0] = 0x1;
 	OutputParam.FreqSelect[1] = OutputParam.FreqSelect[2] = OutputParam.FreqSelect[3] = OutputParam.FreqSelect[4] = 0;

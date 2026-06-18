@@ -1,0 +1,78 @@
+{
+	"version": 1.0,
+	"description": "NavIC L1/L5 combined wideband IF data generation",
+	"time": {
+		"type": "UTC",
+		"year": 2025,
+		"month": 1,
+		"day": 1,
+		"hour": 6,
+		"minute": 0,
+		"second": 0
+	},
+	"trajectory": {
+		"name": "static India receiver",
+		"initPosition": {
+			"type": "LLA",
+			"format": "d",
+			"longitude": 78.70605461,
+			"latitude": 19.39406954,
+			"altitude": -0.749
+		},
+		"initVelocity": {
+			"type": "SCU",
+			"speed": 0,
+			"course": 0
+		},
+		"trajectoryList": [
+			{
+				"type": "Const",
+				"time": 0.2
+			}
+		]
+	},
+	"ephemeris": {
+		"type": "RINEX",
+		"name": "EphData/BRDC00IGS_R_20250010000_01D_MN.rnx"
+	},
+	"output": {
+		"type": "IFdata",
+		"format": "IQ8",
+		"sampleFreq": 410,
+		"centerFreq": 1375.935,
+		"name": "NavIC_L1_L5_IQ8.bin",
+		"config": {
+			"elevationMask": 0
+		},
+		"systemSelect": [
+			{
+				"system": "GPS",
+				"signal": "L1CA",
+				"enable": false
+			},
+			{
+				"system": "NavIC",
+				"signal": "I1SD",
+				"enable": true
+			},
+			{
+				"system": "NavIC",
+				"signal": "I1SP",
+				"enable": true
+			},
+			{
+				"system": "NavIC",
+				"signal": "I5S",
+				"enable": true
+			}
+		]
+	},
+	"power": {
+		"noiseFloor": -172,
+		"initPower": {
+			"unit": "dBHz",
+			"value": 53
+		},
+		"elevationAdjust": false
+	}
+}

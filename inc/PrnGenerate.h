@@ -53,6 +53,11 @@ private:
 	int *GetMemorySequence(const unsigned int *BinarySequence, int SectorLength);
 	int *GetQzssL1CA(int Prn);
 	int *GetQzssL5(int Prn, bool Pilot);
+	int *GetNavICI5S(int Prn);
+	int *GetNavICI1S(int Prn, bool Pilot);
+	static unsigned long long ShiftNavICI1S(unsigned long long &R0, unsigned long long &R1, unsigned int &C);
+	static int LfsrOutput(unsigned int &Reg, unsigned int Tap, int Depth);
+	static unsigned int ReverseRegister(unsigned int Reg, int Depth);
 
 	static const unsigned int L1CAPrnInit[32];
 	static const unsigned int L5IPrnInit[32];
@@ -62,6 +67,13 @@ private:
 	static const unsigned int QzssL1CAPrnInit[10];
 	static const unsigned int QzssL5IPrnInit[10];
 	static const unsigned int QzssL5QPrnInit[10];
+	static const unsigned int NavICI5SG2Init[14];
+	static const unsigned long long NavICI1SDR0Init[14];
+	static const unsigned long long NavICI1SDR1Init[14];
+	static const unsigned int NavICI1SDCInit[14];
+	static const unsigned long long NavICI1SPR0Init[14];
+	static const unsigned long long NavICI1SPR1Init[14];
+	static const unsigned int NavICI1SPCInit[14];
 	static const int QzssL1CDataInsertIndex[10];
 	static const int QzssL1CDataPhaseDiff[10];
 	static const int QzssL1CPilotInsertIndex[10];

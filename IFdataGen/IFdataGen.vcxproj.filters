@@ -111,6 +111,15 @@
     <ClInclude Include="..\inc\NavData.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\inc\NavICL1Ldpc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\inc\NavICL1NavBit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\inc\NavICLNavBit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\inc\MessageOutput.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -120,6 +129,12 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\NavData.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\NavICL1NavBit.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\NavICLNavBit.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\src\PilotBit.cpp">

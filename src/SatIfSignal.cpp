@@ -12,6 +12,8 @@
 #include "SatIfSignal.h"
 #include "FastMath.h"
 
+BOOL CSatIfSignal::NavICL1SbocEnabled = FALSE;
+
 CSatIfSignal::CSatIfSignal(int MsSampleNumber, int SatIfFreq, GnssSystem SatSystem, int SatSignalIndex, unsigned char SatId) : SampleNumber(MsSampleNumber), IfFreq(SatIfFreq), System(SatSystem), SignalIndex(SatSignalIndex), Svid((int)SatId)
 {
 	SampleArray = new complex_number[SampleNumber];
@@ -25,6 +27,11 @@ CSatIfSignal::CSatIfSignal(int MsSampleNumber, int SatIfFreq, GnssSystem SatSyst
 		DataLength = PrnSequence->Attribute->DataPeriod * PrnSequence->Attribute->ChipRate;
 		PilotLength = PrnSequence->Attribute->PilotPeriod * PrnSequence->Attribute->ChipRate;
 	}
+}
+
+void CSatIfSignal::SetNavICL1SbocEnabled(BOOL Enabled)
+{
+	NavICL1SbocEnabled = Enabled;
 }
 
 CSatIfSignal::~CSatIfSignal()
@@ -104,6 +111,8 @@ complex_number CSatIfSignal::GetPrnValue(double& CurChip, double CodeStep)
 	complex_number PrnValue;
 	int IsBoc = (PrnSequence->Attribute->Attribute) & PRN_ATTRIBUTE_BOC;
 	int IsL2C = (PrnSequence->Attribute->Attribute) & PRN_ATTRIBUTE_TMD;
+	int IsNavICL1Sboc = NavICL1SbocEnabled && System == NavICSystem &&
+		(SignalIndex == SIGNAL_INDEX_I1SD || SignalIndex == SIGNAL_INDEX_I1SP);
 
 	if (DataLength == 0)
 		return complex_number(0, 0);
@@ -125,7 +134,21 @@ complex_number CSatIfSignal::GetPrnValue(double& CurChip, double CodeStep)
 		else
 			PrnValue += PrnSequence->PilotPrn[PilotChip] ? -PilotSignal : PilotSignal;
 	}
-	if (IsBoc && (ChipCount & 1))	// second half of BOC code
+	if (IsNavICL1Sboc)
+	{
+		const int Boc1 = (ChipCount & 1) ? -1 : 1;
+		const int Boc6 = (((int)floor(CurChip * 6.0)) & 1) ? -1 : 1;
+		const double Alpha = sqrt(6.0 / 11.0);
+		const double Beta = sqrt(4.0 / 110.0);
+		const double Gamma = sqrt(4.0 / 11.0);
+		const double Eta = sqrt(6.0 / 110.0);
+
+		if (SignalIndex == SIGNAL_INDEX_I1SD)
+			PrnValue = complex_number(0, PrnValue.real * (Gamma * Boc1 + Eta * Boc6));
+		else
+			PrnValue = complex_number(PrnValue.real * (Alpha * Boc1 - Beta * Boc6), 0);
+	}
+	else if (IsBoc && (ChipCount & 1))	// second half of BOC code
 		PrnValue *= -1;
 	CurChip += CodeStep;
 	// check whether go beyond next code period (pilot code period multiple of data code period, so only check data period)

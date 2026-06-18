@@ -21,6 +21,8 @@
 #include "BCNav2Bit.h"
 #include "BCNav3Bit.h"
 #include "GNavBit.h"
+#include "NavICL1NavBit.h"
+#include "NavICLNavBit.h"
 #include "PilotBit.h"
 
 const SignalAttribute CSatelliteSignal::SignalAttributes[32] = {
@@ -39,6 +41,8 @@ const SignalAttribute CSatelliteSignal::SignalAttributes[32] = {
 {        1,        4,     0x7,      2000,   },	// index 11 for I/NAV E5b
 {        1,        1,     0x0,      1000,   },	// index 12 for CNAV E6
 {        1,       10,     0x0,      2000,   },	// index 13 for GNAV
+{        1,       20,     0x0,     12000,   },	// index 14 for NavIC I5S
+{       10,        1,     0x0,     18000,   },	// index 15 for NavIC I1S
 };
 
 CSatelliteSignal::CSatelliteSignal()
@@ -141,6 +145,18 @@ BOOL CSatelliteSignal::SetSignalAttribute(GnssSystem System, int SignalIndex, Na
 			return NavData ? ((typeid(*NavData) == typeid(CNavBit)) ? TRUE : FALSE) : TRUE;
 		default: return FALSE;
 		}
+	case NavICSystem:
+		switch (SatSignal)
+		{
+		case SIGNAL_INDEX_I1SD:
+		case SIGNAL_INDEX_I1SP:
+			Attribute = &SignalAttributes[15];
+			return NavData ? ((typeid(*NavData) == typeid(NavICL1NavBit)) ? TRUE : FALSE) : TRUE;
+		case SIGNAL_INDEX_I5S:
+			Attribute = &SignalAttributes[14];
+			return NavData ? ((typeid(*NavData) == typeid(NavICLNavBit)) ? TRUE : FALSE) : TRUE;
+		default: return FALSE;
+		}
 	default: return FALSE;	// unknown system
 	}
 }
@@ -177,6 +193,8 @@ BOOL CSatelliteSignal::GetSatelliteSignal(GNSS_TIME TransmitTime, complex_number
 		TransmitTime.MilliSeconds += 604800000;
 
 	Milliseconds = TransmitTime.MilliSeconds + (GalileoE1Signal ? 1000 : 0);	// E1 page has 1000ms bias to week boundary
+	if (Milliseconds < 0)
+		Milliseconds += 604800000;
 	FrameNumber = Milliseconds / Attribute->FrameLength;	// subframe/page number
 	Milliseconds %= Attribute->FrameLength;
 	BitNumber = Milliseconds / BitLength;	// current bit position within current subframe/page
@@ -291,6 +309,23 @@ BOOL CSatelliteSignal::GetSatelliteSignal(GNSS_TIME TransmitTime, complex_number
 		case SIGNAL_INDEX_L5:
 			DataSignal = complex_number(0, DataBit * AMPLITUDE_1_2);
 			PilotSignal = complex_number(PilotBit * AMPLITUDE_1_2, 0);
+			break;
+		}
+		break;
+	case NavICSystem:
+		switch (SatSignal)
+		{
+		case SIGNAL_INDEX_I1SD:
+			DataSignal = complex_number((double)DataBit, 0);
+			PilotSignal = complex_number(0, 0);
+			break;
+		case SIGNAL_INDEX_I1SP:
+			DataSignal = complex_number(0, 0);
+			PilotSignal = complex_number(PilotBit ? PilotBit : 1, 0);
+			break;
+		case SIGNAL_INDEX_I5S:
+			DataSignal = complex_number((double)DataBit, 0);
+			PilotSignal = complex_number(0, 0);
 			break;
 		}
 		break;
